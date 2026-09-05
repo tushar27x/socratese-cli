@@ -1,0 +1,26 @@
+[project]
+name = "socratese"
+version = "0.1.0"
+description = "A Socratic RAG CLI that questions you about your own Obsidian vault."
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.0",
+    "platformdirs>=4.0",
+    "tomli-w>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+socratese = "socratese.cli.main:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/socratese"]
