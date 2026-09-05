@@ -1,6 +1,35 @@
-"""Vault detection and discovery.
+import os
+from pathlib import Path
+from socratese.vault.models import Vault
 
-Per decisions log: detect a vault by `.obsidian` directory presence,
-walk upward from cwd (git-status-style) for single-vault lookup, and
-do a bounded scan from OS-conventional roots for `init`.
-"""
+SKIP_DIRS = {
+    ".git",
+    "node_modules",
+    "venv",
+    ".venv",
+    "__pycache__",
+    ".cache",
+    ".idea",
+}
+
+VAULT_MARKER = '.obsidian'
+MAX_DEPTH = 6
+
+def _ignore_scan_error(error: OSError) -> None:
+    pass
+
+def find_vaults(root: Path, max_depth: int = MAX_DEPTH) -> list[Path]:
+    root = Path(root)
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_ignore_scan_error):
+        depth = len(Path(dirpath).relative_to(root).parts)
+        if depth > max_depth:
+            dirnames[:] = []
+            continue
+        if VAULT_MARKER in dirnames:
+            found.append(Path(dirpath))
+            dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+
+    return found

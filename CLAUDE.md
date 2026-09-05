@@ -215,13 +215,10 @@ entry noting what changed and why.
 [[vaults]]
 name = "Personal Notes"
 path = "/home/user/Documents/PersonalVault"
-is_default = true
 last_indexed = "2026-09-01T10:00:00Z"
 ```
-- Fields: `name` (friendly display), `path`, `is_default` (so `ask`
-  doesn't require `--vault` when there's an obvious choice),
-  `last_indexed` (basis for a future "this vault has changed, re-index?"
-  check).
+- Fields: `name` (friendly display), `path`, `last_indexed` (basis for
+  a future "this vault has changed, re-index?" check).
 
 ### First run / vault management UX
 - No silent auto-scan on unrelated commands — surprising filesystem
