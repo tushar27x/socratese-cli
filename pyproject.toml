@@ -8,6 +8,7 @@ dependencies = [
     "rich>=13.0",
     "platformdirs>=4.0",
     "tomli-w>=1.0",
+    "python-frontmatter>=1.1"
 ]
 
 [project.optional-dependencies]
