@@ -234,6 +234,20 @@ last_indexed = "2026-09-01T10:00:00Z"
   socratese vault rescan
   ```
 
+### Embedding model: OpenAI `text-embedding-3-small`
+- Anthropic has no embeddings API, so this choice is independent of
+  whatever Phase 4's dialogue LLM provider ends up being.
+- Cheap, well-documented, the standard default in the RAG ecosystem —
+  legible choice over Voyage AI's marginal quality edge.
+
+### Vector store: Chroma, local persistent client
+- Single-user desktop CLI, no concurrent access or network service
+  needed — rules out hosted DBs (Pinecone, Qdrant Cloud) as unnecessary
+  ops overhead.
+- Chroma over LanceDB: LanceDB's scale advantages (columnar/Parquet)
+  don't matter at thousands-of-notes scale; Chroma is the more
+  recognizable default.
+
 ---
 
 ## 6. When in doubt
