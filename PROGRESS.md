@@ -1,6 +1,6 @@
 # Socratese — Progress
 
-Last updated: 2026-09-05
+Last updated: 2026-09-07
 
 Status/continuity doc for picking this project back up in a new session.
 For *why* decisions were made, see `CLAUDE.md` section 5 (the living
@@ -26,11 +26,42 @@ next," not the reasoning.
   wired into `cli/main.py` via `app.add_typer(vault_app, name="vault")`.
   Rich for output; `Console(soft_wrap=True)` (needed — default wrapping
   broke on long paths, see git history for why).
-- Tests: 22 passing, mirroring source structure under `tests/` —
-  `vault/test_models.py`, `test_config.py`, `vault/test_discovery.py`,
-  `cli/test_vault.py`. Config/vault tests use `monkeypatch` on
-  `config.get_config_path` to avoid touching the real
-  `~/.config/socratese/config.toml`. CLI tests use `typer.testing.CliRunner`.
+- Tracked vault: `learning` at `/home/tushar27x/notes/obsidian/learning`
+  (`socratese vault list` to confirm it's still there).
+
+**Phase 1: vault parsing & chunking — fully built and tested.**
+
+- `src/socratese/ingest/models.py` — `Note` dataclass (`path`, `title`,
+  `frontmatter`, `wikilinks`, `content`).
+- `src/socratese/ingest/parser.py` — `parse_note()`/`parse_vault()`.
+  Uses `python-frontmatter` for YAML frontmatter (main dependency, not
+  dev-only — the shipped CLI needs it at runtime). `WIKILINK_RE` regex
+  handles all three Obsidian link forms: `[[Target]]`,
+  `[[Target|Display]]`, `[[Target#Heading]]` — captures the target only,
+  discards display text/heading anchor via `[^\]]*` before the closing
+  `]]`.
+- `src/socratese/chunking/models.py` — `Chunk` dataclass (`note_path`,
+  `note_title`, `heading`, `content`, `frontmatter`). Self-contained —
+  carries note metadata directly rather than requiring a lookup back
+  into `Note`, since retrieval later needs to display "came from X.md
+  under heading Y" without a second fetch.
+- `src/socratese/chunking/chunker.py` — `chunk_note()`/`chunk_notes()`.
+  Splits by markdown heading (`#`–`######`), one chunk per section.
+  Content before the first heading becomes its own chunk with
+  `heading=""`. Empty sections produce no chunk. Heading-less notes
+  become a single whole-note chunk.
+  **Known gap, deliberately deferred:** no max-chunk-size fallback yet —
+  an oversized heading-less section won't get split further (e.g. at
+  paragraph boundaries). Add if/when a real note in `learning` produces
+  a chunk too large to embed sensibly.
+
+Tests: 34 passing, mirroring source structure under `tests/` —
+`vault/test_models.py`, `test_config.py`, `vault/test_discovery.py`,
+`cli/test_vault.py`, `ingest/test_parser.py`, `chunking/test_chunker.py`.
+Config/vault tests use `monkeypatch` on `config.get_config_path` to avoid
+touching the real `~/.config/socratese/config.toml`. CLI tests use
+`typer.testing.CliRunner`. Ingest/chunking tests use pytest's `tmp_path`
+fixture — no real vault touched.
 
 Run `pytest -v` from repo root to confirm (needs `pip install -e ".[dev]"`
 in the venv once, for `pytest` itself).
@@ -45,22 +76,33 @@ in the venv once, for `pytest` itself).
   `Path.home()` + OS-typical roots (Documents, iCloud Drive, etc.) for
   first-run setup. `discovery.find_vaults()` supports this (just needs
   a root passed in), but nothing calls it with those default roots yet.
-- Nothing past vault management — no ingest, chunking, embedding,
-  vector store, retrieval, or dialogue code exists yet. All of
-  `src/socratese/{ingest,chunking,embedding,vectorstore,retrieval,dialogue}/`
-  are still docstring-only stub files.
+- Chunker has no max-size fallback (see above).
+- Nothing past chunking — no embedding, vector store, retrieval, or
+  dialogue code exists yet. All of
+  `src/socratese/{embedding,vectorstore,retrieval,dialogue}/` are still
+  docstring-only stub files.
+- No CLI command wires up ingest/chunking yet (no `socratese index` or
+  similar) — `parse_vault()`/`chunk_notes()` are only exercised by tests
+  so far, not run end-to-end against the real `learning` vault.
 
-## Next step (agreed, not yet started)
+## Next step (up for discussion, not yet started)
 
-**Phase 1: vault parsing & chunking.**
-- `src/socratese/ingest/parser.py` — walk a tracked vault's markdown
-  files, parse YAML frontmatter and `[[wikilinks]]`.
-- `src/socratese/chunking/chunker.py` — split parsed notes into
-  semantically useful chunks.
+**Phase 2: embeddings & vector store.**
 
-Building it against a real vault: `learning` is already tracked
-(`/home/tushar27x/notes/obsidian/learning`) — `socratese vault list`
-to confirm it's still there.
+This is the decision CLAUDE.md flags as mine to argue through, not one
+to be handed. Open questions to resolve first:
+
+1. Offline/local embeddings vs. hosted API — depends on whether an API
+   key is already assumed elsewhere (the Socratic dialogue LLM will
+   need one regardless; could mean reusing that provider for embeddings
+   too, for simplicity).
+2. Vault size ballpark — determines whether a simple in-memory/SQLite-
+   backed store is enough, or a real vector DB (Chroma, LanceDB, etc.)
+   is warranted.
+
+Once decided: pick + justify an embedding model, pick + justify a
+vector store, then build `src/socratese/embedding/` and
+`src/socratese/vectorstore/`.
 
 ## Environment notes
 
@@ -68,3 +110,5 @@ to confirm it's still there.
 - `pip install -e ".[dev]"` after any dependency change to `pyproject.toml`.
 - Git repo has a remote (`origin/main`); `requirements.txt` was removed
   as redundant with `pyproject.toml`.
+- `python-frontmatter` lives in main `dependencies`, not `[dev]` — it's
+  a runtime dependency of `ingest/parser.py`, not just a test tool.
