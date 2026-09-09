@@ -84,14 +84,17 @@ def test_chunk_note_carries_frontmatter_onto_every_chunk():
     assert chunks[0].frontmatter == {"tags": ["python"]}
 
 
-def test_chunk_note_empty_note_produces_one_empty_chunk():
+def test_chunk_note_empty_note_produces_no_chunks():
     note = make_note("")
 
     chunks = chunk_note(note)
 
-    assert len(chunks) == 1
-    assert chunks[0].content == ""
+    assert chunks == []
 
+def test_chunk_note_whitespace_only_content_produces_no_chunks():
+    note = make_note("   \n\n   ")
+    chunks = chunk_note(note)
+    assert chunks == []
 
 def test_chunk_notes_flattens_across_multiple_notes():
     note_a = make_note("# A1\nContent A1")

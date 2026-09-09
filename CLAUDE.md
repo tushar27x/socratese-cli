@@ -248,6 +248,26 @@ last_indexed = "2026-09-01T10:00:00Z"
   don't matter at thousands-of-notes scale; Chroma is the more
   recognizable default.
 
+### Vault content scope: skip `.trash/`, `.obsidian/`, and `*.excalidraw.md`
+- `.trash/` (Obsidian's deleted-notes folder) and `.obsidian/` (plugin
+  config) are never real vault content — pruned in `ingest/parser.py`
+  via a local `SKIP_DIRS`, separate from `vault/discovery.py`'s
+  same-named constant (different concern: pruning while *finding*
+  vaults on disk vs. pruning *inside* a vault already found).
+- `*.excalidraw.md` files (Obsidian Excalidraw plugin drawings, stored
+  as markdown containing a `compressed-json` blob of canvas data) are
+  skipped entirely, not chunked/embedded. Real discovery: a 12KB
+  Excalidraw file blew past OpenAI's 8192-token embedding limit because
+  compressed JSON tokenizes far more densely than prose (~1 token/char,
+  not ~4). Considered building the general max-chunk-size fallback
+  (chunker's already-known deferred gap) instead, but rejected for this
+  case: splitting compressed JSON into sub-chunks produces noise no
+  Socratic dialogue could meaningfully question the user about — not
+  worth the embedding cost. Tradeoff accepted: any real prose a user
+  types inside a drawing's text elements is also skipped; no
+  Excalidraw-aware parsing was built for this narrow case (6 files in
+  the tracked vault).
+
 ---
 
 ## 6. When in doubt

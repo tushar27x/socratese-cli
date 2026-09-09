@@ -11,7 +11,8 @@ def chunk_note(note: Note) -> list[Chunk]:
     matches = list(HEADING_RE.finditer(note.content))
 
     if not matches:
-        return [_make_chunk(note, heading="", body=note.content)]
+        body = note.content.strip()
+        return [_make_chunk(note, heading="", body=body)] if body else []
 
     chunks = []
 

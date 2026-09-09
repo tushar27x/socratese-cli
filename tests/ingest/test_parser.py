@@ -66,3 +66,31 @@ def test_parse_vault_finds_all_markdown_files(tmp_path):
 def test_parse_vault_empty_directory(tmp_path):
     notes = list(parse_vault(tmp_path))
     assert notes == []
+
+def test_parse_vault_skips_trash_directory(tmp_path):
+    write_note(tmp_path, "keep.md", "Keep this")
+    trash = tmp_path / ".trash"
+    trash.mkdir()
+    write_note(trash, "deleted.md", "Should not be indexed")
+
+    notes = list(parse_vault(tmp_path))
+
+    assert {n.title for n in notes} == {"keep"}
+
+
+def test_parse_vault_skips_obsidian_directory(tmp_path):
+    write_note(tmp_path, "keep.md", "Keep this")
+    obsidian = tmp_path / ".obsidian"
+    obsidian.mkdir()
+    write_note(obsidian, "config.md", "Should not be indexed")
+
+    notes = list(parse_vault(tmp_path))
+
+    assert {n.title for n in notes} == {"keep"}
+
+def test_parse_vault_skip_excalidraw_files(tmp_path):
+    write_note(tmp_path, "real_note.md", "Real content")
+    write_note(tmp_path, "diagram.excalidraw.md", "draing data")
+    notes = list(parse_vault(tmp_path))
+
+    assert {n.title for n in notes} == {"real_note"}
