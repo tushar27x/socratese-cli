@@ -11,6 +11,16 @@ def get_client():
         raise ValueError("OPENAI_API_KEY environment variable is not set.")
     return OpenAI(api_key=openai_api_key)
 
+def embed_text(text: str, client: OpenAI | None = None) -> list[float]:
+    """Embed a single free-text string (e.g. a search query)."""
+    client = client or get_client()
+    response = client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=[text]
+    )
+    return response.data[0].embedding
+
+
 def embed_chunks(chunks: list[Chunk], client: OpenAI | None = None) -> list[list[float]]:
     if not chunks:
         return []

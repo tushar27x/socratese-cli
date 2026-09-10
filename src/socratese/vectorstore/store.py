@@ -38,6 +38,6 @@ def query(embedding: list[float], n_results: int = 5, collection=None) -> list[d
     result = collection.query(query_embeddings=[embedding], n_results=n_results)
 
     return [
-        {"content": doc, **meta}
-        for doc, meta in zip(result["documents"][0], result["metadatas"][0])
+        {"content": doc, "distance": dist, **meta}
+        for doc, meta, dist in zip(result["documents"][0], result["metadatas"][0], result["distances"][0])
     ]
