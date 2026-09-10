@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from socratese.chunking.models import Chunk
-from socratese.embedding.embedder import embed_chunks, get_client
+from socratese.embedding.embedder import embed_chunks, embed_text, get_client
 
 
 def make_chunk(content: str) -> Chunk:
@@ -66,6 +66,32 @@ def test_embed_chunks_uses_configured_model():
     client = FakeClient()
 
     embed_chunks([make_chunk("text")], client=client)
+
+    assert client.embeddings.last_call["model"] == "text-embedding-3-small"
+
+
+def test_embed_text_sends_the_text_as_a_single_input():
+    client = FakeClient()
+
+    embed_text("what is a vector database?", client=client)
+
+    assert client.embeddings.last_call["input"] == ["what is a vector database?"]
+
+
+def test_embed_text_returns_one_flat_vector():
+    client = FakeClient()
+
+    result = embed_text("query", client=client)
+
+    # embed_chunks returns list[list[float]]; embed_text must unwrap to list[float],
+    # since that is what the vector store's query() expects.
+    assert result == [0.0, 0.0, 0.0]
+
+
+def test_embed_text_uses_configured_model():
+    client = FakeClient()
+
+    embed_text("query", client=client)
 
     assert client.embeddings.last_call["model"] == "text-embedding-3-small"
 
