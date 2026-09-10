@@ -111,11 +111,69 @@ any fixture-based test) — worth knowing the shape of these for next time:
    8192-token embedding limit. Fixed by excluding the file type entirely
    (see decisions log for the tradeoff considered and rejected).
 
-Tests: 58 passing, mirroring source structure under `tests/` —
+**Phase 3: retrieval — built and tested, verified against the real vault.**
+
+- `src/socratese/embedding/embedder.py` — added `embed_text(text,
+  client=None) -> list[float]` alongside the existing `embed_chunks()`.
+  Separate function rather than reusing `embed_chunks()`, because that
+  one takes `Chunk` objects and reads `.content` off each; a search query
+  has no `note_path`/`heading`, so fabricating a `Chunk` to reuse it
+  would be the wrong shape. Returns one flat vector, not a list of them.
+- `src/socratese/retrieval/models.py` — `RetrievedChunk` dataclass
+  (`note_path`, `note_title`, `heading`, `content`, `distance`). Note
+  the filename is `models.py`, plural, matching `ingest/`, `chunking/`
+  and `vault/`. Deliberately *not* reusing `Chunk`: `frontmatter` is
+  never written to Chroma's metadata, so a `Chunk` here would always
+  carry an empty dict that lies about what's available.
+- `src/socratese/retrieval/retriever.py` — `retrieve(query, n_results=5,
+  client=None, collection=None) -> list[RetrievedChunk]`. Embeds the
+  query, hands the vector to `store.query()`, maps the result dicts onto
+  the dataclass (including `str` → `Path` for `note_path`). The
+  `client`/`collection` params exist as injection seams, matching the
+  convention at every other seam in the codebase — they're what let
+  `test_retriever.py` avoid monkeypatching entirely.
+- `src/socratese/vectorstore/store.py` — `query()` now carries Chroma's
+  `distances` through in each result dict instead of discarding them.
+  They were already in `Collection.query()`'s default `include`, so this
+  cost nothing. Watch the plural: the key Chroma returns is `distances`
+  (a list per query embedding); the key we build is singular `distance`.
+- **No CLI command for retrieval**, deliberately. Retrieved chunks are an
+  intermediate that feeds Phase 4's Socratic prompt, not useful one-shot
+  output. A Typer command now would be UI for a feature that doesn't
+  exist yet.
+
+**Retrieval quality, measured against the real 851-chunk index** (not a
+fixture — this is the number that decides Phase 4's design):
+
+| distance | meaning |
+|---|---|
+| 0.66 – 1.04 | genuine match |
+| ~1.27+ | nothing relevant exists in the vault |
+
+Chroma's default space is **squared L2**, so lower is closer and the
+value is *not* a 0-1 similarity. OpenAI embeddings are unit-normalized,
+so L2 and cosine rank identically — switching the collection to cosine
+would only make the number prettier and would cost a full re-index, so
+it wasn't done. Real examples: "how does redis persist data to disk?"
+→ `Redis Persistence` at 0.665; "how does the attention mechanism work?"
+→ `Transformer Architecture` at 0.986. By contrast "what is a vector
+database?" returned nothing below 1.270, and the top hits were *Redis
+RDB snapshot* chunks — because `AI/Vector Database.md` is the 47-byte
+frontmatter-only stub from the Phase 1 bug story, so it produces zero
+chunks and the index contains nothing on that topic at all. Retrieval
+was correct; the corpus was empty. **A ~1.2 threshold is therefore a
+usable "I have nothing for you" signal** — an important Phase 4 input,
+since a tutor that questions you about Redis when you asked about vector
+databases is a worse failure than one that admits the gap.
+
+Conclusion: **plain vector similarity is good enough.** Hybrid keyword
+search and re-ranking (CLAUDE.md phase notes) stay stretch goals.
+
+Tests: 69 passing, mirroring source structure under `tests/` —
 `vault/test_models.py`, `test_config.py`, `vault/test_discovery.py`,
 `cli/test_vault.py`, `cli/test_index.py`, `ingest/test_parser.py`,
 `chunking/test_chunker.py`, `embedding/test_embedder.py`,
-`vectorstore/test_store.py`.
+`vectorstore/test_store.py`, `retrieval/test_retriever.py`.
 Config/vault tests use `monkeypatch` on `config.get_config_path` to avoid
 touching the real `~/.config/socratese/config.toml`. CLI tests use
 `typer.testing.CliRunner`. Ingest/chunking tests use pytest's `tmp_path`
@@ -137,6 +195,25 @@ failure keep their `last_indexed` while the failed one stays `None`.
 Vault fixtures are real directories with a real `.obsidian/` marker under
 `tmp_path`, since `index_vault()` validates that marker before parsing.
 
+`retrieval/test_retriever.py` needs **no monkeypatching at all** — it
+passes a fake OpenAI client and a real `tmp_path` Chroma collection
+straight into `retrieve()` through its injection seams. Worth contrasting
+with `cli/test_index.py` above, which has no such seams and must patch
+module attributes instead. Covers metadata mapping, the `str` → `Path`
+round-trip, nearest-first ordering, both endpoints of Chroma's
+squared-L2 scale (identical vectors read 0.0, orthogonal read 2.0),
+`n_results`, over-asking a small collection, and an empty collection.
+`embedding/test_embedder.py` also gained `embed_text()` coverage, which
+it previously had none of — which is exactly how a
+`cliet = cliet or get_client()` typo survived to runtime.
+
+Every retrieval test was verified by mutating the source and confirming
+it fails (dropping the `Path()` conversion, hardcoding `n_results`,
+replacing `distance` with a constant, restoring the `cliet` typo). That
+last check caught a weak assertion: an exact-match test asserting
+`distance == 0.0` passed *harder* when distance was stubbed to `0.0`,
+which is why the test now pins both ends of the scale instead.
+
 Run `pytest -v` from repo root to confirm (needs `pip install -e ".[dev]"`
 in the venv once, for `pytest` itself).
 
@@ -157,38 +234,36 @@ in the venv once, for `pytest` itself).
   now (setup + `vault add` → `index`, i.e. what actually works today),
   or wait until `ask` exists so it can document a real end-to-end flow
   instead of being rewritten at Phase 4.
-- Nothing past indexing — no retrieval or dialogue code exists yet. All
-  of `src/socratese/{retrieval,dialogue}/` are still docstring-only stub
-  files.
+- Nothing past retrieval — `src/socratese/dialogue/socratic.py` is still
+  a docstring-only stub. No prompt design, no LLM provider chosen for
+  dialogue, no `ask`/`review` command, no Textual app.
+- Nothing consumes `retrieve()` yet. It works and is tested, but no CLI
+  command or dialogue code calls it — by design, until Phase 4 exists.
+- No relevance threshold is enforced anywhere. The ~1.2 cutoff above is
+  a measured observation, not code. Deciding where that check lives is a
+  Phase 4 call (argued: the dialogue layer, since "how confident is
+  confident enough" is a conversation-quality judgment, not a search one).
 
 ## Next step
 
-1. **Phase 3: retrieval.** Similarity search against the now-populated
-   Chroma store. `vectorstore.store.query()` already exists and takes a
-   raw embedding, but nothing calls it yet. Planned shape — *designed,
-   not yet written*:
-   - Add `embed_text(text, client=None) -> list[float]` to
-     `embedding/embedder.py`. Needed because `embed_chunks()` takes
-     `Chunk` objects and reads `.content` off each; a search query has no
-     `note_path`/`heading`, so fabricating a `Chunk` just to reuse that
-     function would be the wrong shape. Leaves `embed_chunks` untouched.
-   - `retrieval/retriever.py` gets
-     `retrieve(query: str, n_results: int = 5) -> list[dict]` — embed the
-     query, hand the vector to `store.query()`. Pure function, no new
-     state, no knowledge of Chroma or OpenAI internals (that's what the
-     existing module split is for). `n_results` stays a parameter rather
-     than a constant because Phase 4's prompt will want to tune how many
-     chunks it feeds the model.
-   - **No CLI command for this step.** Retrieved chunks aren't useful
-     one-shot output on their own; they're an intermediate that feeds
-     Phase 4's Socratic prompt. A Typer command now would be UI for a
-     feature that doesn't exist.
-   - Then `tests/retrieval/test_retriever.py`, combining
-     `vectorstore/test_store.py`'s real-Chroma-on-`tmp_path` approach
-     with `test_embedder.py`'s fake OpenAI client.
-2. Given only ~850 chunks, plain vector similarity is probably
-   sufficient to start; hybrid keyword search / re-ranking (per CLAUDE.md
-   phase notes) is a stretch goal, not a blocker.
+1. **Phase 4: Socratic dialogue generation** — the interesting/hard part,
+   and the first phase where the risk is *prompt quality*, not plumbing.
+   Open decisions to make before writing code:
+   - **Which LLM provider for dialogue.** Independent of the embedding
+     choice (that was OpenAI only because Anthropic has no embeddings
+     API). Anthropic is a live option here.
+   - **Prompt design that produces questions, not answers.** CLAUDE.md
+     names the failure modes to design against: the model just answering
+     anyway, and leading questions that give the answer away in the ask.
+   - **What "no good match" does.** The ~1.2 threshold above is measured
+     but unenforced; a tutor confidently questioning you about unrelated
+     notes is worse than one saying "you have no notes on this yet."
+   - **How retrieved chunks enter the prompt** — `RetrievedChunk` already
+     carries `note_title`/`heading`, so grounding a question in "your note
+     X, under heading Y" is possible without a second lookup.
+2. Once dialogue exists, `ask`/`review` as a **Textual** app (per the
+   decisions log) — a multi-turn conversation, not a one-shot Typer
+   command. `retrieve()` is ready to be called by it.
 3. Consider whether `.trash` history is worth also purging from the
    vault config over time, or whether excluding it at parse-time is
    sufficient forever — not urgent, just noting it as a possible
