@@ -1,6 +1,6 @@
 # Socratese — Progress
 
-Last updated: 2026-09-09
+Last updated: 2026-09-10
 
 Status/continuity doc for picking this project back up in a new session.
 For *why* decisions were made, see `CLAUDE.md` section 5 (the living
@@ -111,10 +111,11 @@ any fixture-based test) — worth knowing the shape of these for next time:
    8192-token embedding limit. Fixed by excluding the file type entirely
    (see decisions log for the tradeoff considered and rejected).
 
-Tests: 51 passing, mirroring source structure under `tests/` —
+Tests: 58 passing, mirroring source structure under `tests/` —
 `vault/test_models.py`, `test_config.py`, `vault/test_discovery.py`,
-`cli/test_vault.py`, `ingest/test_parser.py`, `chunking/test_chunker.py`,
-`embedding/test_embedder.py`, `vectorstore/test_store.py`.
+`cli/test_vault.py`, `cli/test_index.py`, `ingest/test_parser.py`,
+`chunking/test_chunker.py`, `embedding/test_embedder.py`,
+`vectorstore/test_store.py`.
 Config/vault tests use `monkeypatch` on `config.get_config_path` to avoid
 touching the real `~/.config/socratese/config.toml`. CLI tests use
 `typer.testing.CliRunner`. Ingest/chunking tests use pytest's `tmp_path`
@@ -123,6 +124,18 @@ calls). Vectorstore tests use a *real* Chroma `PersistentClient` pointed
 at `tmp_path` (deliberate — a fake collection wouldn't have caught the
 `emebeddings`/`metadata` keyword-arg typos that real integration testing
 did catch).
+
+`cli/test_index.py` monkeypatches `embed_chunks`/`add_chunks` **on the
+`socratese.cli.index` module**, not on their defining modules — `index.py`
+imports them by name at import time, so patching `embedding.embedder` or
+`vectorstore.store` directly would rebind a name `index.py` never looks at
+again, and the test would hit the real API. Covers: no vaults tracked,
+unknown vault name, single-vault success, `all`, stale/invalid vault path
+skipped, empty vault, and the API-error path (a genuine `openai.APIError`
+constructed with an `httpx.Request`) asserting vaults indexed *before* the
+failure keep their `last_indexed` while the failed one stays `None`.
+Vault fixtures are real directories with a real `.obsidian/` marker under
+`tmp_path`, since `index_vault()` validates that marker before parsing.
 
 Run `pytest -v` from repo root to confirm (needs `pip install -e ".[dev]"`
 in the venv once, for `pytest` itself).
@@ -138,26 +151,44 @@ in the venv once, for `pytest` itself).
   first-run setup. `discovery.find_vaults()` supports this (just needs
   a root passed in), but nothing calls it with those default roots yet.
 - Chunker has no general max-chunk-size fallback (see above).
-- No tests yet for `cli/index.py` (`tests/cli/test_index.py` doesn't
-  exist) — now that a real successful run confirms actual behavior
-  against real data, this is the natural next thing to write, mirroring
-  the `CliRunner` pattern from `test_vault.py`.
+- No `README.md` in the repo at all. The remote (`origin/main`) is
+  therefore a portfolio repo with no front door — the most visible
+  remaining doc gap. Open question, not yet decided: write a minimal one
+  now (setup + `vault add` → `index`, i.e. what actually works today),
+  or wait until `ask` exists so it can document a real end-to-end flow
+  instead of being rewritten at Phase 4.
 - Nothing past indexing — no retrieval or dialogue code exists yet. All
   of `src/socratese/{retrieval,dialogue}/` are still docstring-only stub
   files.
 
 ## Next step
 
-1. **Write `tests/cli/test_index.py`** — the real run's behavior is now
-   known, so this is no longer blocked. `CliRunner`-based, mirroring
-   `test_vault.py`'s pattern; will need a fake/injected embedder+store
-   path (or monkeypatched `index_vault` dependencies) so tests don't hit
-   the real OpenAI API or real Chroma store.
-2. **Phase 3: retrieval** — similarity search against the now-populated
-   Chroma store (`vectorstore.store.query()` already built, just unused
-   by anything yet). Given only ~850 chunks, plain vector similarity is
-   probably sufficient to start; hybrid keyword search / re-ranking (per
-   CLAUDE.md phase notes) is a stretch goal, not a blocker.
+1. **Phase 3: retrieval.** Similarity search against the now-populated
+   Chroma store. `vectorstore.store.query()` already exists and takes a
+   raw embedding, but nothing calls it yet. Planned shape — *designed,
+   not yet written*:
+   - Add `embed_text(text, client=None) -> list[float]` to
+     `embedding/embedder.py`. Needed because `embed_chunks()` takes
+     `Chunk` objects and reads `.content` off each; a search query has no
+     `note_path`/`heading`, so fabricating a `Chunk` just to reuse that
+     function would be the wrong shape. Leaves `embed_chunks` untouched.
+   - `retrieval/retriever.py` gets
+     `retrieve(query: str, n_results: int = 5) -> list[dict]` — embed the
+     query, hand the vector to `store.query()`. Pure function, no new
+     state, no knowledge of Chroma or OpenAI internals (that's what the
+     existing module split is for). `n_results` stays a parameter rather
+     than a constant because Phase 4's prompt will want to tune how many
+     chunks it feeds the model.
+   - **No CLI command for this step.** Retrieved chunks aren't useful
+     one-shot output on their own; they're an intermediate that feeds
+     Phase 4's Socratic prompt. A Typer command now would be UI for a
+     feature that doesn't exist.
+   - Then `tests/retrieval/test_retriever.py`, combining
+     `vectorstore/test_store.py`'s real-Chroma-on-`tmp_path` approach
+     with `test_embedder.py`'s fake OpenAI client.
+2. Given only ~850 chunks, plain vector similarity is probably
+   sufficient to start; hybrid keyword search / re-ranking (per CLAUDE.md
+   phase notes) is a stretch goal, not a blocker.
 3. Consider whether `.trash` history is worth also purging from the
    vault config over time, or whether excluding it at parse-time is
    sufficient forever — not urgent, just noting it as a possible
@@ -174,7 +205,7 @@ in the venv once, for `pytest` itself).
   shipped CLI, not just test tools.
 - `.env` holds `OPENAI_API_KEY`, confirmed gitignored and untracked.
   `load_dotenv()` is called at the top of `cli/main.py`. OpenAI account
-  has billing credits added (as of this session) — indexing costs
+  has billing credits added (as of 2026-09-09) — indexing costs
   fractions of a cent per full run at this vault size.
 - Chroma's local persistent store lives at
   `platformdirs.user_data_dir("socratese")` — not tracked in git, not
