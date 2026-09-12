@@ -268,6 +268,71 @@ last_indexed = "2026-09-01T10:00:00Z"
   Excalidraw-aware parsing was built for this narrow case (6 files in
   the tracked vault).
 
+### Dialogue module split: pure `prompt.py`, I/O-owning `socratic.py`
+- `dialogue/prompt.py` holds `SYSTEM_PROMPT`, `format_chunks()` and
+  `build_user_turn()` — pure string building, zero I/O. `dialogue/socratic.py`
+  owns the client and the one API call.
+- Reasoning: the prompt is the part that gets iterated on twenty times, and
+  it should be testable with no mocking at all — same boundary as pure
+  `chunking/chunker.py` vs. client-owning `embedding/embedder.py`.
+  `tests/dialogue/test_prompt.py` consequently needs no fakes whatsoever.
+- Retrieved chunks are rendered as `<excerpt source="Title — Heading">`
+  blocks, not markdown headers: chunk content *is* markdown with its own
+  `#` headings, so markdown-in-markdown gives the model no reliable
+  boundary. `RetrievedChunk` already carries title/heading, so the label
+  costs no extra lookup.
+- The notes go in the **user** turn, never the system prompt. System stays
+  byte-identical across every request, so prompt caching stays possible
+  later without rework (caching is a prefix match — volatile content must
+  come after stable content).
+
+### Relevance threshold: enforced in the dialogue layer, at 1.2
+- The ~1.2 cutoff measured in Phase 3 is now code: `RELEVANCE_THRESHOLD`
+  in `socratic.py`, applied as `distance <= RELEVANCE_THRESHOLD`.
+- It lives here, not in `retrieval/`, because "how confident is confident
+  enough" is a conversation-quality judgment, not a search one. `retrieve()`
+  stays honest about what it found; this layer decides what's worth asking
+  about.
+- Verified against the real index, not just fixtures: "what is a vector
+  database?" drops all five hits and never reaches the API.
+
+### Dialogue LLM provider: Anthropic
+- Independent of the embedding choice — that was OpenAI only because
+  Anthropic has no embeddings API, so it constrained nothing here.
+- Model name is read from `DIALOGUE_MODEL` *inside* the function rather
+  than at module import, so a value loaded from `.env` still takes effect.
+  (`embedder.py` reads `EMBEDDING_MODEL` at import time and had exactly
+  this bug — see the `fix:` commit that reordered `load_dotenv()`.)
+
+### Dialogue model: Claude Haiku 4.5
+- $1/$5 per MTok vs Claude Opus 5's $5/$25. The larger saving is structural:
+  Haiku 4.5 predates adaptive thinking, so it generates no thinking tokens
+  at all. On Opus 5 those are on by default and billed as output, and for a
+  one-sentence question they dwarfed the ~60 tokens actually returned.
+- Tradeoff accepted knowingly: prompt adherence is the hard part of this
+  project, and "don't answer," "don't lead," "stay inside the excerpts" are
+  the instructions a smaller model drops first — and drops *subtly*, since
+  a leading question still reads like a question. `DIALOGUE_MODEL` allows a
+  spot-check against a larger model with no code change.
+- `max_tokens=4096` kept despite the switch: it is a ceiling, not a
+  reservation, and unused tokens cost nothing.
+
+### Provider fallback: designed, not yet built
+- Planned shape, triggered by hitting an empty Anthropic credit balance: an
+  adapter per provider in `dialogue/providers.py`, each translating *both*
+  the request shape (Anthropic takes `system=` as a param, OpenAI as a
+  message) and the error vocabulary (each SDK's `APIError` → a shared
+  `ProviderError`), so `socratic.py` imports no SDK and the fallback loop
+  stays provider-agnostic.
+- A fallback would return a `Question(text, provider)` rather than a bare
+  string — a silent provider switch is unacceptable, since question quality
+  shifting for an unattributable reason would send prompt tuning chasing
+  the wrong cause.
+- Deliberately *not* built yet: credits were added instead. A permanent
+  billing failure would have made OpenAI the de-facto primary provider by
+  accident rather than by choice, which is a decision to make, not to
+  inherit from an error path.
+
 ---
 
 ## 6. When in doubt

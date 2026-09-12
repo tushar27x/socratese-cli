@@ -1,6 +1,6 @@
 # Socratese — Progress
 
-Last updated: 2026-09-10
+Last updated: 2026-09-12
 
 Status/continuity doc for picking this project back up in a new session.
 For *why* decisions were made, see `CLAUDE.md` section 5 (the living
@@ -169,11 +169,59 @@ databases is a worse failure than one that admits the gap.
 Conclusion: **plain vector similarity is good enough.** Hybrid keyword
 search and re-ranking (CLAUDE.md phase notes) stay stretch goals.
 
-Tests: 69 passing, mirroring source structure under `tests/` —
+**Phase 4: Socratic dialogue generation — core built and tested, proven
+against the real vault. No CLI surface yet.**
+
+- `src/socratese/dialogue/prompt.py` — `SYSTEM_PROMPT`, `format_chunks()`,
+  `build_user_turn()`. Pure string building, no I/O, so the prompt is
+  testable with zero mocking (see decisions log for why this is split from
+  `socratic.py`). Chunks render as `<excerpt source="Title — Heading">`
+  blocks; the heading-less case renders the title alone, with no dangling
+  em dash.
+- `src/socratese/dialogue/socratic.py` — `get_client()` /
+  `ask_questions(topic, chunks, client=None) -> str`. Filters chunks by
+  `RELEVANCE_THRESHOLD = 1.2` (inclusive `<=`), then makes one Anthropic
+  call. Returns `"No relevant notes found."` when nothing passes the gate —
+  **note this is a plain `str`, indistinguishable by type from a real
+  question**; see "Not built yet" below.
+- Model: `claude-haiku-4-5`, overridable via `DIALOGUE_MODEL`. Read inside
+  the function, not at module import, so a `.env` value actually applies.
+- `load_dotenv()` in `cli/main.py` was moved above the `socratese` imports.
+  It ran *after* them, so `embedder.py`'s module-level
+  `os.environ.get("EMBEDDING_MODEL")` had already been evaluated and the
+  variable could never be set from `.env`. Latent, not yet biting — the
+  default was the wanted value — but it would have silently swallowed the
+  new `DIALOGUE_MODEL` too.
+
+**First real question generated** (Claude Opus 5, before the switch to
+Haiku — kept verbatim as the quality baseline any prompt change has to
+beat, since it can't be reconstructed once Haiku is the default):
+
+> Topic: "how does redis persist data to disk?" — top hit `Redis
+> Persistence` at 0.665
+>
+> *"Your notes say the child writes a point-in-time copy while the parent
+> keeps serving — so what becomes of writes the parent accepts after the
+> fork but before the child finishes, and which of the listed advantages
+> depends on that answer?"*
+
+Assessed against the three failure modes CLAUDE.md names: **did not lead**
+(strip the preamble and you still cannot answer it without recalling
+copy-on-write), **stayed inside the excerpts**, **did not answer**. Two
+rule violations worth knowing: it opened with a preamble restating the
+notes (rule 1 says none — the model folded it inside the question sentence),
+and it asked two linked questions rather than one. The second "violation"
+is arguably the best part of the output, since it forces a connection
+across two retrieved chunks — the rule may be wrong, not the model.
+**Prompt not yet tuned on this; sample size is one, and it is an Opus
+sample, not a Haiku one.**
+
+Tests: 94 passing, mirroring source structure under `tests/` —
 `vault/test_models.py`, `test_config.py`, `vault/test_discovery.py`,
 `cli/test_vault.py`, `cli/test_index.py`, `ingest/test_parser.py`,
 `chunking/test_chunker.py`, `embedding/test_embedder.py`,
-`vectorstore/test_store.py`, `retrieval/test_retriever.py`.
+`vectorstore/test_store.py`, `retrieval/test_retriever.py`,
+`dialogue/test_prompt.py`, `dialogue/test_socratic.py`.
 Config/vault tests use `monkeypatch` on `config.get_config_path` to avoid
 touching the real `~/.config/socratese/config.toml`. CLI tests use
 `typer.testing.CliRunner`. Ingest/chunking tests use pytest's `tmp_path`
@@ -214,8 +262,44 @@ last check caught a weak assertion: an exact-match test asserting
 `distance == 0.0` passed *harder* when distance was stubbed to `0.0`,
 which is why the test now pins both ends of the scale instead.
 
+`dialogue/test_prompt.py` (8 tests) needs **no fakes at all** — `prompt.py`
+is pure. Covers the heading-less label (no dangling em dash), content
+preserved verbatim including chunk-internal markdown headings, blank-line
+separation between excerpts, and topic-before-excerpts ordering (pinned
+deliberately: that ordering is what keeps prompt caching possible later).
+One unusual test asserts `SYSTEM_PROMPT` still contains its four
+load-bearing rules — a tripwire on prose, not logic, because an edit
+dropping "Never state the answer" would degrade every question with no
+other test failing anywhere.
+
+`dialogue/test_socratic.py` (17 tests) injects a fake Anthropic client
+through the `client=None` seam. The two that matter most: a chunk at
+*exactly* `RELEVANCE_THRESHOLD` is kept (pins `<=` as inclusive), and the
+API is **never called** when nothing passes the gate — asserting only on
+the return value would still pass if the filter ran after the request. The
+non-text-block test uses a fake `thinking` block with no `.text` attribute
+at all, so a filter that stopped checking `.type` raises rather than
+quietly passing.
+
+Both dialogue files were mutation-verified the same way retrieval was —
+eight mutations (`<=`→`<`, filter bypassed, `.strip()` removed, `.type`
+filter removed, model hardcoded, `max_tokens` lowballed, heading separator
+always rendered, excerpts joined with a single newline), each breaking
+exactly one test. One-failure-each is the signal worth having: no test is
+redundant, none so broad it catches everything.
+
 Run `pytest -v` from repo root to confirm (needs `pip install -e ".[dev]"`
 in the venv once, for `pytest` itself).
+
+**Manual evaluation is not a test and must not live in `tests/`** — it
+costs real money, hits the network, and needs a human to judge the output.
+The sweep used to eyeball question quality across topics (prints each
+chunk's distance with a PASS/drop marker against the threshold, plus
+retrieve/generate timings) belongs in `scripts/eval_dialogue.py`; it is
+currently only in shell history. Note that a heredoc version needs
+`load_dotenv(".env")`, not bare `load_dotenv()` — the latter calls
+`find_dotenv()`, which walks the stack for the calling *file's* directory
+and asserts when run from stdin.
 
 ## Not built yet (known gaps, deliberately deferred)
 
@@ -234,37 +318,57 @@ in the venv once, for `pytest` itself).
   now (setup + `vault add` → `index`, i.e. what actually works today),
   or wait until `ask` exists so it can document a real end-to-end flow
   instead of being rewritten at Phase 4.
-- Nothing past retrieval — `src/socratese/dialogue/socratic.py` is still
-  a docstring-only stub. No prompt design, no LLM provider chosen for
-  dialogue, no `ask`/`review` command, no Textual app.
-- Nothing consumes `retrieve()` yet. It works and is tested, but no CLI
-  command or dialogue code calls it — by design, until Phase 4 exists.
-- No relevance threshold is enforced anywhere. The ~1.2 cutoff above is
-  a measured observation, not code. Deciding where that check lives is a
-  Phase 4 call (argued: the dialogue layer, since "how confident is
-  confident enough" is a conversation-quality judgment, not a search one).
+- **No `ask`/`review` command and no Textual app.** `ask_questions()` works
+  and is tested, but nothing in the CLI calls it — the only way to run the
+  dialogue layer today is by hand in a REPL. `retrieve()` and
+  `ask_questions()` are both ready for it.
+- **`ask_questions()` returns a bare `str` for the no-match case.** "No
+  relevant notes found." has the same type as a real question, so a caller
+  cannot branch on it without string-matching, and a UI would render it in
+  the question pane as though the tutor asked it. Should become
+  `Question | None` (or at minimum `str | None`) when the provider refactor
+  lands — the return type is changing anyway at that point.
+- **No error handling around the dialogue API call.** A failure surfaces as
+  a raw traceback with the useful sentence buried under ~25 lines of SDK
+  internals (confirmed by hitting a real 400 for an empty credit balance).
+  The library raising is correct — `index.py` set the precedent that the
+  *CLI* catches and renders. So this fix belongs in the `ask` command that
+  doesn't exist yet: catch `anthropic.APIError`, with
+  `AuthenticationError` (bad key) and `BadRequestError` (billing) deserving
+  better messages than the SDK's.
+- **Provider fallback designed but not built** — see the decisions log for
+  the adapter shape and why it was deferred rather than built when the
+  Anthropic balance ran out.
+- **Prompt is untuned.** One Opus sample and a handful of Haiku runs is not
+  an evaluation. The two known rule violations (preamble, compound question)
+  are recorded above but not acted on, deliberately — changing
+  `SYSTEM_PROMPT` off a sample size of one would be guessing.
+- `scripts/eval_dialogue.py` doesn't exist yet (see above).
 
 ## Next step
 
-1. **Phase 4: Socratic dialogue generation** — the interesting/hard part,
-   and the first phase where the risk is *prompt quality*, not plumbing.
-   Open decisions to make before writing code:
-   - **Which LLM provider for dialogue.** Independent of the embedding
-     choice (that was OpenAI only because Anthropic has no embeddings
-     API). Anthropic is a live option here.
-   - **Prompt design that produces questions, not answers.** CLAUDE.md
-     names the failure modes to design against: the model just answering
-     anyway, and leading questions that give the answer away in the ask.
-   - **What "no good match" does.** The ~1.2 threshold above is measured
-     but unenforced; a tutor confidently questioning you about unrelated
-     notes is worse than one saying "you have no notes on this yet."
-   - **How retrieved chunks enter the prompt** — `RetrievedChunk` already
-     carries `note_title`/`heading`, so grounding a question in "your note
-     X, under heading Y" is possible without a second lookup.
-2. Once dialogue exists, `ask`/`review` as a **Textual** app (per the
-   decisions log) — a multi-turn conversation, not a one-shot Typer
-   command. `retrieve()` is ready to be called by it.
-3. Consider whether `.trash` history is worth also purging from the
+1. **Save `scripts/eval_dialogue.py` and actually evaluate the prompt.**
+   Cheapest next thing and a prerequisite for everything else — every
+   later judgment about prompt or model quality is guesswork without a
+   repeatable sweep. Run 5-6 topics, deliberately including areas where
+   the notes are thin (that's where rule 3, "stay inside the excerpts,"
+   should crack first on Haiku). Only then decide whether to relax rule 1
+   to bless the compound question, and whether to forbid the preamble
+   more explicitly.
+2. **`ask` as a one-shot Typer command before the Textual app.** The
+   decisions log commits to Textual for multi-turn dialogue, and that
+   still holds — but `ask_questions()` is currently single-turn, so a
+   one-shot `socratese ask "<topic>"` is the honest surface for what
+   exists, and it's where the error handling listed above belongs. Multi-
+   turn conversation state is a separate design problem; building the
+   Textual app first would mean designing a UI for a conversation the
+   dialogue layer can't yet hold.
+3. **Provider fallback** (`dialogue/providers.py`) when it's actually
+   wanted — shape is already decided, see the decisions log. Note this
+   changes `ask_questions()`'s signature and return type, which will
+   rewrite all 17 tests in `dialogue/test_socratic.py`. Worth doing
+   together with the `Question | None` fix rather than twice.
+4. Consider whether `.trash` history is worth also purging from the
    vault config over time, or whether excluding it at parse-time is
    sufficient forever — not urgent, just noting it as a possible
    future edge case (e.g. if the vault grows a very large `.trash/`).
@@ -275,13 +379,21 @@ in the venv once, for `pytest` itself).
 - `pip install -e ".[dev]"` after any dependency change to `pyproject.toml`.
 - Git repo has a remote (`origin/main`); `requirements.txt` was removed
   as redundant with `pyproject.toml`.
-- `python-frontmatter`, `openai`, `chromadb`, `python-dotenv` all live in
-  main `dependencies`, not `[dev]` — all are runtime dependencies of the
-  shipped CLI, not just test tools.
-- `.env` holds `OPENAI_API_KEY`, confirmed gitignored and untracked.
-  `load_dotenv()` is called at the top of `cli/main.py`. OpenAI account
-  has billing credits added (as of 2026-09-09) — indexing costs
-  fractions of a cent per full run at this vault size.
+- `python-frontmatter`, `openai`, `chromadb`, `python-dotenv`, `anthropic`
+  all live in main `dependencies`, not `[dev]` — all are runtime
+  dependencies of the shipped CLI, not just test tools.
+- `.env` holds `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, confirmed
+  gitignored and untracked. `.env.example` also documents the optional
+  `EMBEDDING_MODEL` and `DIALOGUE_MODEL` overrides.
+- `load_dotenv()` must stay **above** the `socratese` imports in
+  `cli/main.py`. It was below them, which silently broke `EMBEDDING_MODEL`
+  (read at `embedder.py` import time). If a linter reorders those imports,
+  the bug comes back — `# noqa: E402` on the `socratese` imports is the
+  standard pin.
+- Both provider accounts have billing credits (OpenAI as of 2026-09-09,
+  Anthropic as of 2026-09-12 — the latter after a 400
+  `invalid_request_error` on an empty balance). Indexing costs fractions of
+  a cent per full run at this vault size; a Haiku question is far less.
 - Chroma's local persistent store lives at
   `platformdirs.user_data_dir("socratese")` — not tracked in git, not
   gitignored explicitly either since it's outside the repo entirely.
