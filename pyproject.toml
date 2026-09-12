@@ -12,6 +12,7 @@ dependencies = [
     "openai>=1.0",
     "chromadb>=0.5",
     "python-dotenv>=1.0",
+    "anthropic>=1.0",
 ]
 
 [project.optional-dependencies]
