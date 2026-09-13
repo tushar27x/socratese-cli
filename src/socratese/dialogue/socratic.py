@@ -18,11 +18,11 @@ def ask_questions(
         topic: str,
         chunks: list[RetrievedChunk],
         client: Anthropic | None=None
-) -> str:
+) -> str | None:
     relevant = [c for c in chunks if c.distance <= RELEVANCE_THRESHOLD]
 
     if not relevant:
-        return "No relevant notes found."
+        return None
 
     client = client or get_client()
     res = client.messages.create(
