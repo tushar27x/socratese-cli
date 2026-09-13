@@ -10,7 +10,7 @@ def write_note(dir_: Path, name: str, content: str) -> Path:
     return path
 
 
-def test_parse_note_with_frontmatter_and_wikilinks(tmp_path):
+def test_parse_note_with_frontmatter_and_wikilinks(tmp_path: Path):
     note_path = write_note(
         tmp_path,
         "test.md",
@@ -29,7 +29,7 @@ See [[Other Note]] and [[Other Note|Display Text]] and [[Heading Note#Section]].
     assert "See [[Other Note]]" in note.content
 
 
-def test_parse_note_with_no_frontmatter(tmp_path):
+def test_parse_note_with_no_frontmatter(tmp_path: Path):
     note_path = write_note(tmp_path, "plain.md", "Just a plain note, no links.\n")
 
     note = parse_note(note_path)
@@ -40,7 +40,7 @@ def test_parse_note_with_no_frontmatter(tmp_path):
     assert note.content.strip() == "Just a plain note, no links."
 
 
-def test_parse_note_with_empty_file(tmp_path):
+def test_parse_note_with_empty_file(tmp_path: Path):
     note_path = write_note(tmp_path, "empty.md", "")
 
     note = parse_note(note_path)
@@ -50,7 +50,7 @@ def test_parse_note_with_empty_file(tmp_path):
     assert note.content == ""
 
 
-def test_parse_vault_finds_all_markdown_files(tmp_path):
+def test_parse_vault_finds_all_markdown_files(tmp_path: Path):
     write_note(tmp_path, "a.md", "Note A")
     sub = tmp_path / "subdir"
     sub.mkdir()
@@ -63,11 +63,11 @@ def test_parse_vault_finds_all_markdown_files(tmp_path):
     assert titles == {"a", "b"}
 
 
-def test_parse_vault_empty_directory(tmp_path):
+def test_parse_vault_empty_directory(tmp_path: Path):
     notes = list(parse_vault(tmp_path))
     assert notes == []
 
-def test_parse_vault_skips_trash_directory(tmp_path):
+def test_parse_vault_skips_trash_directory(tmp_path: Path):
     write_note(tmp_path, "keep.md", "Keep this")
     trash = tmp_path / ".trash"
     trash.mkdir()
@@ -78,7 +78,7 @@ def test_parse_vault_skips_trash_directory(tmp_path):
     assert {n.title for n in notes} == {"keep"}
 
 
-def test_parse_vault_skips_obsidian_directory(tmp_path):
+def test_parse_vault_skips_obsidian_directory(tmp_path: Path):
     write_note(tmp_path, "keep.md", "Keep this")
     obsidian = tmp_path / ".obsidian"
     obsidian.mkdir()
@@ -88,7 +88,7 @@ def test_parse_vault_skips_obsidian_directory(tmp_path):
 
     assert {n.title for n in notes} == {"keep"}
 
-def test_parse_vault_skip_excalidraw_files(tmp_path):
+def test_parse_vault_skip_excalidraw_files(tmp_path: Path):
     write_note(tmp_path, "real_note.md", "Real content")
     write_note(tmp_path, "diagram.excalidraw.md", "draing data")
     notes = list(parse_vault(tmp_path))

@@ -1,11 +1,12 @@
 # tests/chunking/test_chunker.py
 from pathlib import Path
+from typing import Any
 
 from socratese.chunking.chunker import chunk_note, chunk_notes
 from socratese.ingest.models import Note
 
 
-def make_note(content: str, frontmatter: dict | None = None) -> Note:
+def make_note(content: str, frontmatter: dict[str, Any] | None = None) -> Note:
     return Note(
         path=Path("fake/note.md"),
         title="note",

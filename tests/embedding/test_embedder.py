@@ -1,8 +1,10 @@
 # tests/embedding/test_embedder.py
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
+from openai import OpenAI
 
 from socratese.chunking.models import Chunk
 from socratese.embedding.embedder import embed_chunks, embed_text, get_client
@@ -21,10 +23,12 @@ class FakeEmbeddings:
     """Stands in for client.embeddings — records the call, returns fake vectors."""
 
     def __init__(self):
-        self.last_call = None
+        self.last_call: dict[str, Any] = {}
+        self.call_count = 0
 
     def create(self, model: str, input: list[str]):
         self.last_call = {"model": model, "input": input}
+        self.call_count += 1
         # one fake vector per input text, so we can check ordering
         data = [SimpleNamespace(embedding=[float(i)] * 3) for i in range(len(input))]
         return SimpleNamespace(data=data)
@@ -38,17 +42,17 @@ class FakeClient:
 def test_embed_chunks_empty_list_returns_empty_without_calling_client():
     client = FakeClient()
 
-    result = embed_chunks([], client=client)
+    result = embed_chunks([], client=cast(OpenAI, client))
 
     assert result == []
-    assert client.embeddings.last_call is None  # never called
+    assert client.embeddings.call_count == 0  # never called
 
 
 def test_embed_chunks_returns_one_vector_per_chunk_in_order():
     client = FakeClient()
     chunks = [make_chunk("first"), make_chunk("second"), make_chunk("third")]
 
-    result = embed_chunks(chunks, client=client)
+    result = embed_chunks(chunks, client=cast(OpenAI, client))
 
     assert result == [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]]
 
@@ -57,7 +61,7 @@ def test_embed_chunks_sends_chunk_content_as_input_texts():
     client = FakeClient()
     chunks = [make_chunk("alpha"), make_chunk("beta")]
 
-    embed_chunks(chunks, client=client)
+    embed_chunks(chunks, client=cast(OpenAI, client))
 
     assert client.embeddings.last_call["input"] == ["alpha", "beta"]
 
@@ -65,7 +69,7 @@ def test_embed_chunks_sends_chunk_content_as_input_texts():
 def test_embed_chunks_uses_configured_model():
     client = FakeClient()
 
-    embed_chunks([make_chunk("text")], client=client)
+    embed_chunks([make_chunk("text")], client=cast(OpenAI, client))
 
     assert client.embeddings.last_call["model"] == "text-embedding-3-small"
 
@@ -73,7 +77,7 @@ def test_embed_chunks_uses_configured_model():
 def test_embed_text_sends_the_text_as_a_single_input():
     client = FakeClient()
 
-    embed_text("what is a vector database?", client=client)
+    embed_text("what is a vector database?", client=cast(OpenAI, client))
 
     assert client.embeddings.last_call["input"] == ["what is a vector database?"]
 
@@ -81,7 +85,7 @@ def test_embed_text_sends_the_text_as_a_single_input():
 def test_embed_text_returns_one_flat_vector():
     client = FakeClient()
 
-    result = embed_text("query", client=client)
+    result = embed_text("query", client=cast(OpenAI, client))
 
     # embed_chunks returns list[list[float]]; embed_text must unwrap to list[float],
     # since that is what the vector store's query() expects.
@@ -91,19 +95,19 @@ def test_embed_text_returns_one_flat_vector():
 def test_embed_text_uses_configured_model():
     client = FakeClient()
 
-    embed_text("query", client=client)
+    embed_text("query", client=cast(OpenAI, client))
 
     assert client.embeddings.last_call["model"] == "text-embedding-3-small"
 
 
-def test_get_client_raises_when_api_key_missing(monkeypatch):
+def test_get_client_raises_when_api_key_missing(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
         get_client()
 
 
-def test_get_client_returns_client_when_api_key_set(monkeypatch):
+def test_get_client_returns_client_when_api_key_set(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "fake-key-for-testing")
 
     client = get_client()

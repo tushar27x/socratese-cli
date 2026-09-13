@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Any
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +11,7 @@ class Vault:
     path: Path
     last_indexed: datetime | None = None
     
-    def to_toml_dict(self) -> dict:
+    def to_toml_dict(self) -> dict[str, str]:
         data = {
             "name": self.name,
             "path": str(self.path),
@@ -20,7 +21,7 @@ class Vault:
         return data
 
     @classmethod
-    def from_toml_dict(cls, data: dict) -> "Vault":
+    def from_toml_dict(cls, data: dict[str, Any]) -> "Vault":
         last_indexed = data.get("last_indexed")
         return cls(
             name = data["name"],

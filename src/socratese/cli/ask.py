@@ -20,13 +20,13 @@ def ask(
         False, "--sources", "-s", help="Reveal which notes the questions come from"
     ),
 ) -> None:
-    """Be questioned Socratically about you own notes."""
+    """Be questioned Socratically about your own notes."""
     if not any(v.last_indexed for v in load_vaults()):
         console.print("No vault has been indexed yet. Run [bold]socratese index <vault>[/bold] first.")
         raise typer.Exit(code=1)
 
     try:
-        with console.status("Searching you notes..."):
+        with console.status("Searching your notes..."):
             chunks = retrieve(topic, n_results=n_chunks)
     except openai.APIError as e:
         console.print(f"[red]Error:[/red] Could not embed your question: {e}")

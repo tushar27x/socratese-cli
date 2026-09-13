@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from chromadb.api.models.Collection import Collection
+from openai import OpenAI
+
 from socratese.embedding.embedder import embed_text
 from socratese.retrieval.models import RetrievedChunk
 from socratese.vectorstore.store import query as query_store
@@ -11,8 +14,8 @@ from socratese.vectorstore.store import query as query_store
 def retrieve(
     query: str,
     n_results: int = 5,
-    client=None,
-    collection=None,
+    client: OpenAI | None = None,
+    collection: Collection | None = None,
 ) -> list[RetrievedChunk]:
     """Embed `query` and return the nearest stored chunks, closest first."""
     embedding = embed_text(query, client=client)

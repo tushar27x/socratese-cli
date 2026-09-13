@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-from socratese.vault.models import Vault
 
 SKIP_DIRS = {
     ".git",
@@ -21,7 +20,7 @@ def _ignore_scan_error(error: OSError) -> None:
 def find_vaults(root: Path, max_depth: int = MAX_DEPTH) -> list[Path]:
     root = Path(root)
     found: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(root, onerror=_ignore_scan_error):
+    for dirpath, dirnames, _filenames in os.walk(root, onerror=_ignore_scan_error):
         depth = len(Path(dirpath).relative_to(root).parts)
         if depth > max_depth:
             dirnames[:] = []

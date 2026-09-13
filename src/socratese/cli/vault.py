@@ -65,7 +65,7 @@ def remove_vault(
 @app.command("rescan")
 def rescan_vaults() -> None:
     vaults = load_vaults()
-    still_valid = []
+    still_valid: list[Vault] = []
     for vault in vaults:
       if (vault.path /VAULT_MARKER).is_dir():
         still_valid.append(vault)

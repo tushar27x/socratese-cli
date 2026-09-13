@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -7,6 +8,6 @@ from pathlib import Path
 class Note:
     path: Path
     title: str
-    frontmatter: dict = field(default_factory=dict)
-    wikilinks: list[str] = field(default_factory=list)
+    frontmatter: dict[str, Any] = field(default_factory=dict[str, Any])
+    wikilinks: list[str] = field(default_factory=list[str])
     content: str = ""

@@ -14,7 +14,7 @@ def chunk_note(note: Note) -> list[Chunk]:
         body = note.content.strip()
         return [_make_chunk(note, heading="", body=body)] if body else []
 
-    chunks = []
+    chunks: list[Chunk] = []
 
     preamble = note.content[:matches[0].start()].strip()
     if preamble:
@@ -40,7 +40,7 @@ def _make_chunk(note: Note, heading: str, body: str) -> Chunk:
     )
 
 def chunk_notes(notes: list[Note]) -> list[Chunk]:
-    chunks = []
+    chunks: list[Chunk] = []
     for note in notes:
         chunks.extend(chunk_note(note))
 

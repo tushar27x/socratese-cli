@@ -5,7 +5,7 @@ from openai import OpenAI
 from socratese.chunking.models import Chunk
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 
-def get_client():
+def get_client() -> OpenAI:
     openai_api_key = os.environ.get("OPENAI_API_KEY")
     if not openai_api_key:
         raise ValueError("OPENAI_API_KEY environment variable is not set.")

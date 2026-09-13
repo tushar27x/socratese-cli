@@ -29,3 +29,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/socratese"]
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "strict"
+venvPath = "."
+venv = "venv"
+# chromadb ships no type stubs; its runtime types are still checked via inference.
+reportMissingTypeStubs = false

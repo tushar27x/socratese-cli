@@ -5,12 +5,7 @@ from socratese.dialogue.prompt import SYSTEM_PROMPT, build_user_turn, format_chu
 from socratese.retrieval.models import RetrievedChunk
 
 
-def make_chunk(
-    note_title: str = "Redis Persistence",
-    heading: str = "RDB Snapshots",
-    content: str = "Redis forks to write a point-in-time snapshot.",
-    distance: float = 0.7,
-) -> RetrievedChunk:
+def make_chunk(note_title: str = "Redis Persistence", heading: str = "RDB Snapshots", content: str = "Redis forks to write a point-in-time snapshot.", distance: float = 0.7, ) -> RetrievedChunk:
     return RetrievedChunk(
         note_path=Path(f"notes/{note_title}.md"),
         note_title=note_title,
