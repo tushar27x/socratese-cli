@@ -17,8 +17,7 @@ import anthropic
 import openai
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Vertical
-from textual.widgets import Footer, Header, Input, RichLog
+from textual.widgets import Input, RichLog
 
 from socratese import tutor
 from socratese.dialogue.socratic import DEFAULT_MODEL, Session
@@ -34,16 +33,40 @@ BANNER = "Socratese — you answer, it asks. /help for commands."
 class SocrateseApp(App[None]):
     """A conversation pane and a single input that doubles as a command bar."""
 
+
+    #: Backgrounds are transparent throughout: a solid fill would paint over
+    #: the terminal's background (and any wallpaper behind it), which is the
+    #: one thing a terminal app should not take from the user.
     CSS = """
-    Screen { layout: vertical; }
-    #log { height: 1fr; padding: 0 1; }
-    #entry { dock: bottom; }
+    Screen {
+        background: transparent;
+        layout: vertical;
+    }
+    #log {
+        height: 1fr;
+        background: transparent;
+        padding: 0 1;
+        scrollbar-size-vertical: 1;
+    }
+    #entry {
+        dock: bottom;
+        height: 3;
+        background: transparent;
+        border: round ansi_blue;
+        padding: 0 1;
+    }
+    #entry:focus {
+        border: round ansi_bright_blue;
+    }
     """
 
     BINDINGS = [("ctrl+c", "quit", "Quit")]
 
     def __init__(self) -> None:
-        super().__init__()
+        # ansi_color makes Textual emit the terminal's own 16 ANSI colours
+        # instead of its palette, so the app inherits the user's theme rather
+        # than imposing one. It is a reactive, so it is set, not overridden.
+        super().__init__(ansi_color=True)
         self.session: Session | None = None
         self.history: SessionRecorder | None = None
         self._open_recordings: list[AbstractContextManager[SessionRecorder]] = []
@@ -54,11 +77,10 @@ class SocrateseApp(App[None]):
     # --- layout ---------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        with Vertical():
-            yield RichLog(id="log", wrap=True, markup=True, highlight=False)
+        # No Header or Footer: both paint a solid bar, and a docked Footer
+        # competes with the input for the bottom rows and clips its border.
+        yield RichLog(id="log", wrap=True, markup=True, highlight=False)
         yield Input(placeholder="Type an answer, or /help", id="entry")
-        yield Footer()
 
     def on_mount(self) -> None:
         self.title = "socratese"
@@ -73,11 +95,11 @@ class SocrateseApp(App[None]):
 
     def say_question(self, question: str) -> None:
         self.say("")
-        self.say(f"[bold cyan]{question}[/bold cyan]")
+        self.say(f"[bold ansi_bright_cyan]{question}[/bold ansi_bright_cyan]")
         self.say("")
 
     def say_error(self, message: str) -> None:
-        self.say(f"[red]{message}[/red]")
+        self.say(f"[ansi_red]{message}[/ansi_red]")
 
     # --- input ----------------------------------------------------------
 
@@ -122,7 +144,7 @@ class SocrateseApp(App[None]):
             return
 
         self.selected_vaults = names
-        self.say(f"[green]Next session will use:[/green] {', '.join(names)}")
+        self.say(f"[ansi_green]Next session will use:[/ansi_green] {', '.join(names)}")
 
     def cmd_ask(self, rest: str) -> None:
         if not rest:
@@ -183,7 +205,7 @@ class SocrateseApp(App[None]):
 
         vaults.append(Vault(name=path.name, path=path))
         save_vaults(vaults)
-        self.say(f"[green]Added[/green] {path.name} — /index {path.name} to make it searchable.")
+        self.say(f"[ansi_green]Added[/ansi_green] {path.name} — /index {path.name} to make it searchable.")
 
     def cmd_index(self, rest: str) -> None:
         if not rest:
@@ -199,7 +221,7 @@ class SocrateseApp(App[None]):
 
         vaults = load_vaults()
         if not vaults:
-            self.say("[yellow]No vaults tracked.[/yellow] /add <path> to start.")
+            self.say("[ansi_yellow]No vaults tracked.[/ansi_yellow] /add <path> to start.")
             return
 
         self.say("")
@@ -207,7 +229,7 @@ class SocrateseApp(App[None]):
             if vault.last_indexed:
                 state = f"indexed {vault.last_indexed:%Y-%m-%d}"
             else:
-                state = "[yellow]never indexed[/yellow]"
+                state = "[ansi_yellow]never indexed[/ansi_yellow]"
             chosen = "▸" if vault.name in self.selected_vaults else " "
             self.say(f" {chosen} [bold]{vault.name}[/bold]  [dim]{vault.path}  ({state})[/dim]")
 
@@ -222,7 +244,7 @@ class SocrateseApp(App[None]):
             conn.close()
 
         if not sessions:
-            self.say("[yellow]No past sessions.[/yellow] /ask to start one.")
+            self.say("[ansi_yellow]No past sessions.[/ansi_yellow] /ask to start one.")
             return
 
         self.say("")
@@ -265,7 +287,7 @@ class SocrateseApp(App[None]):
         if announce:
             self.say("\n[dim]Session ended.[/dim]")
         if stalled and session is not None:
-            self.say("[yellow]Worth re-reading — and possibly filling in:[/yellow]")
+            self.say("[ansi_yellow]Worth re-reading — and possibly filling in:[/ansi_yellow]")
             for chunk in session.chunks:
                 label = f"{chunk.note_title} — {chunk.heading}" if chunk.heading else chunk.note_title
                 self.say(f"  [dim]{chunk.distance:.3f}  {label}[/dim]")
@@ -277,7 +299,7 @@ class SocrateseApp(App[None]):
         if not self.warned_stalled and self.session and is_stalled(self.asked, self.session.topic):
             terms = ", ".join(f"'{t}'" for t in sorted(orbiting_terms(self.asked, self.session.topic)))
             self.warned_stalled = True
-            self.say(f"[yellow]These last few questions are all circling {terms}.[/yellow]")
+            self.say(f"[ansi_yellow]These last few questions are all circling {terms}.[/ansi_yellow]")
             self.say("[dim]Your notes may not settle what it is driving at. /end to stop and see them.[/dim]")
 
     # --- workers ---------------------------------------------------------
@@ -388,7 +410,7 @@ class SocrateseApp(App[None]):
             for vault in targets:
                 chunks = index_vault(vault)
                 self.call_from_thread(
-                    self.say, f"[green]Indexed[/green] {vault.name}: {chunks} chunks."
+                    self.say, f"[ansi_green]Indexed[/ansi_green] {vault.name}: {chunks} chunks."
                 )
         except openai.APIError as e:
             self.call_from_thread(self.say_error, f"Embedding failed: {e}")

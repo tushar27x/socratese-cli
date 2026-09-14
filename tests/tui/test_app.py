@@ -195,3 +195,35 @@ async def test_the_input_is_cleared_after_submitting(wired: Path):
         await submit(pilot, app, "/help")  # type: ignore[arg-type]
 
         assert app.query_one("#entry", Input).value == ""
+
+
+async def test_the_input_is_never_clipped_at_any_terminal_size(wired: Path):
+    """The input's round border needs three rows. A docked Footer competing
+    for them silently cut off the bottom edge."""
+    for size in [(100, 24), (80, 15), (60, 10)]:
+        async with SocrateseApp().run_test(size=size) as pilot:
+            app = pilot.app
+            entry = app.query_one("#entry")
+            log = app.query_one("#log")
+
+            assert entry.region.height == 3
+            assert entry.region.y + entry.region.height <= size[1]
+            assert log.region.y + log.region.height <= entry.region.y
+
+
+async def test_the_terminal_background_shows_through(wired: Path):
+    """A solid fill would paint over the user's terminal background and any
+    wallpaper behind it."""
+    async with SocrateseApp().run_test() as pilot:
+        app = pilot.app
+
+        assert app.screen.styles.background.a == 0
+        assert app.query_one("#log").styles.background.a == 0
+        assert app.query_one("#entry").styles.background.a == 0
+
+
+async def test_it_uses_the_terminals_own_ansi_palette(wired: Path):
+    """So the app inherits whatever theme the user has, rather than imposing
+    Textual's."""
+    async with SocrateseApp().run_test() as pilot:
+        assert pilot.app.ansi_color is True
