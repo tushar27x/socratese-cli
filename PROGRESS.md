@@ -404,6 +404,35 @@ and asserts when run from stdin.
 - `socratese index` had no help text (the only command missing a docstring);
   added.
 
+**Long sessions stall around turn 7 — measured, and it changes the plan.**
+An 11-turn scripted session (`eval_dialogue.py`, scenario "9 over a long
+session") stays sharp for about six turns and then grinds. Q7-Q11 were five
+rewordings of the same unanswered question ("what operation connects the score
+to V?"), each quoting the same sentence from the notes back at the user.
+
+Rule 9 holds *literally* the whole way — no two questions share more than half
+their words, which is why the first repetition heuristic passed it. The harness
+now also detects **orbiting**: any run of five consecutive questions sharing
+content words. Q7-Q11 all circle `score, use, vector`; every earlier window
+shares nothing at all. Validated by replaying the captured transcript, not by
+re-spending on the API.
+
+Consequences, in order of importance:
+1. **A session's useful life is ~6 turns.** The Textual app therefore does not
+   need deep scrollback for 20-turn conversations; that was the open design
+   question this eval was run to answer.
+2. **There is no escape hatch when the user is stuck.** Rule 6 forbids
+   confirming, rule 8 forbids answering, and nothing lets the model change
+   tack or concede a hint. A stuck user can only quit. This promotes the
+   "completion state" item from a nice-to-have to the main remaining gap in
+   the dialogue design — it is not "no celebration when you win," it is "no
+   way out when you lose."
+3. **Recitation gets worse the longer a session runs.** The rejected rule 10
+   targeted exactly this, and its failure was measured over 4 turns where the
+   problem is mild. Worth revisiting *specifically for late turns* rather than
+   as a blanket rule — though not by adding a tenth rule, which is what
+   degraded rule 9 last time.
+
 **Known retrieval wart, not yet acted on:** "Redis — Run with docker" scores
 0.807 on "how does redis persist data to disk?" and passes the gate. It is
 about Docker, not persistence. The gate is distance-based only, so an
@@ -443,27 +472,25 @@ first evidence that a 1.2 cutoff is doing less work than the numbers suggest.
 
 ## Next step
 
-1. **Textual app for `ask`.** The decisions log has committed to this since
-   the start, and it is now a UI change rather than an architecture one —
-   `Session` already holds the state. Wants scrollback, a fixed input pane,
-   and somewhere to show `--sources` without interrupting the conversation.
-2. **A completion state for sessions.** Prompt rule 6 means the tutor never
-   says "you've got it," so a conversation funnels forever. Do *not* relax
-   rule 6 to fix this — it is doing real work. More likely an end-of-session
-   summary naming the notes you struggled with, so you know what to re-read.
-   `--sources` is already half of it.
-3. **`init` command / `vault add` with no PATH.** The last two pieces of the
-   original first-run UX. `discovery.find_vaults()` already supports it; it
-   just needs calling with OS-conventional roots.
-4. **Longer-session evaluation.** Every transcript so far stops at 4 turns.
-   Whether question quality holds at 10 is unknown, and it is the most likely
-   place for the conversation to start circling.
+1. **An escape hatch for stuck sessions.** The measured gap above: after ~6
+   turns the model orbits one unanswered point forever and the user's only
+   move is to quit. Needs a design decision before code — options include a
+   turn-aware prompt rule (concede a narrower hint after N failed attempts),
+   a detected-stall nudge, or an explicit "move on" command. Do *not* relax
+   rule 6 to solve it.
+2. **Textual app for `ask`.** Now better specified by the eval: sessions are
+   short, so this is a focused conversation pane rather than a scrollback
+   archive, plus somewhere to surface `--sources` and whatever item 1 becomes.
+3. **A demo recording** (VHS or asciinema) checked in and embedded in the
+   README. Phase 6 calls for a demo and there isn't one; for a portfolio repo
+   this is worth more than any remaining feature. Do it after Textual so it is
+   only recorded once.
+4. **`init` command / `vault add` with no PATH** — the last of the original
+   first-run UX. `discovery.find_vaults()` already supports it.
 5. **Provider fallback** (`dialogue/providers.py`) when actually wanted —
-   shape already decided, see the decisions log. Would change `Session`'s
-   constructor and return types.
+   shape already decided, see the decisions log.
 6. Consider whether `.trash` history is worth also purging from the vault
-   config over time, or whether excluding it at parse-time is sufficient
-   forever — not urgent, just a possible future edge case.
+   config over time — not urgent, just a possible future edge case.
 
 ## Environment notes
 
