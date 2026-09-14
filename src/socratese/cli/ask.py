@@ -8,12 +8,11 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 
-from socratese.config import load_vaults
+from socratese import tutor
 from socratese.dialogue.socratic import DEFAULT_MODEL, Session
 from socratese.dialogue.stall import is_stalled, orbiting_terms
 from socratese.history.recorder import SessionRecorder, recording, resuming
 from socratese.history.store import connect, load_session, recent_sessions
-from socratese.retrieval.retriever import retrieve
 
 console = Console()
 
@@ -92,29 +91,21 @@ def ask(
     ),
 ) -> None:
     """Be questioned Socratically about your own notes."""
-    indexed = [v for v in load_vaults() if v.last_indexed]
-    if not indexed:
-        console.print("No vault has been indexed yet. Run [bold]socratese index <vault>[/bold] first.")
-        raise typer.Exit(code=1)
-
-    known = {v.name for v in indexed}
-    unknown = [name for name in vaults if name not in known]
-    if unknown:
-        console.print(f"[red]Error:[/red] No indexed vault named {', '.join(unknown)}.")
-        console.print(f"Indexed vaults: {', '.join(sorted(known))}")
-        raise typer.Exit(code=1)
-
     try:
         with console.status("Searching your notes..."):
-            chunks = retrieve(topic, n_results=n_chunks, vaults=vaults or None)
+            session = tutor.start(topic, n_chunks=n_chunks, vaults=vaults or None)
+    except tutor.NoVaultsIndexed as e:
+        console.print(f"{e} Run [bold]socratese index <vault>[/bold] first.")
+        raise typer.Exit(code=1)
+    except tutor.NothingRelevant as e:
+        console.print(f"[yellow]{e}[/yellow]")
+        console.print("Nothing was close enough to question you about.")
+        raise typer.Exit(code=1)
+    except tutor.TutorError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1)
     except openai.APIError as e:
         console.print(f"[red]Error:[/red] Could not embed your question: {e}")
-        raise typer.Exit(code=1)
-
-    session = Session(topic, chunks)
-    if not session.has_grounding:
-        console.print(f"[yellow]Your notes have nothing on '{topic}' yet.[/yellow]")
-        console.print("Nothing was close enough to question you about.")
         raise typer.Exit(code=1)
 
     model = os.environ.get("DIALOGUE_MODEL", DEFAULT_MODEL)
@@ -173,12 +164,11 @@ def resume(
         console.print(f"[red]Error:[/red] No session {session_id}. Run [bold]socratese resume[/bold] to list them.")
         raise typer.Exit(code=1)
 
-    if not record.is_resumable:
-        console.print(f"[yellow]Session {session_id} has no stored transcript.[/yellow]")
-        console.print("It predates transcript storage, so there is nothing to continue from.")
+    try:
+        session = tutor.resume(record)
+    except tutor.NotResumable as e:
+        console.print(f"[yellow]{e}[/yellow]")
         raise typer.Exit(code=1)
-
-    session = Session.from_messages(record.topic, record.chunks, record.messages)
 
     console.print(f"\n[dim]Resuming session {record.id}: {record.topic}[/dim]")
     for turn in record.turns:
