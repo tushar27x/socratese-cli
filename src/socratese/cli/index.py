@@ -34,7 +34,7 @@ def index_vault(vault: Vault) -> int:
         embeddings = embed_chunks(chunks)
         progress.update(task, advance=1)
 
-    add_chunks(chunks, embeddings)
+    add_chunks(chunks, embeddings, vault.name)
     vault.last_indexed = datetime.now(timezone.utc)
 
     console.print(

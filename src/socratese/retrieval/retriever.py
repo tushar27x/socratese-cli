@@ -14,10 +14,14 @@ from socratese.vectorstore.store import query as query_store
 def retrieve(
     query: str,
     n_results: int = 5,
+    vaults: list[str] | None = None,
     client: OpenAI | None = None,
     collection: Collection | None = None,
 ) -> list[RetrievedChunk]:
-    """Embed `query` and return the nearest stored chunks, closest first."""
+    """Embed `query` and return the nearest stored chunks, closest first.
+
+    `vaults` restricts the search by vault name; None searches all of them.
+    """
     embedding = embed_text(query, client=client)
     return [
         RetrievedChunk(
@@ -26,6 +30,10 @@ def retrieve(
             heading=hit["heading"],
             content=hit["content"],
             distance=hit["distance"],
+            # chunks indexed before vaults were recorded have no vault field
+            vault=hit.get("vault", ""),
         )
-        for hit in query_store(embedding, n_results=n_results, collection=collection)
+        for hit in query_store(
+            embedding, n_results=n_results, vaults=vaults, collection=collection
+        )
     ]

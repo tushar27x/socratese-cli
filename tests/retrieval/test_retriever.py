@@ -57,7 +57,7 @@ def test_retrieve_maps_stored_metadata_onto_retrieved_chunk(collection: Collecti
     add_chunks(
         [make_chunk("notes/a.md", "Intro", "alpha content")],
         [[1.0, 0.0, 0.0]],
-        collection=collection,
+        vault="testvault", collection=collection,
     )
 
     results = retrieve("query", client=cast(OpenAI, FakeClient()), collection=collection)
@@ -72,7 +72,7 @@ def test_retrieve_maps_stored_metadata_onto_retrieved_chunk(collection: Collecti
 
 def test_retrieve_restores_note_path_as_a_path_object(collection: Collection):
     add_chunks(
-        [make_chunk("notes/a.md", "", "content")], [[1.0, 0.0, 0.0]], collection=collection
+        [make_chunk("notes/a.md", "", "content")], [[1.0, 0.0, 0.0]], vault="testvault", collection=collection
     )
 
     results = retrieve("query", client=cast(OpenAI, FakeClient()), collection=collection)
@@ -86,7 +86,7 @@ def test_retrieve_restores_note_path_as_a_path_object(collection: Collection):
 def test_retrieve_returns_nearest_chunk_first(collection: Collection):
     near = make_chunk("notes/near.md", "", "close match")
     far = make_chunk("notes/far.md", "", "distant match")
-    add_chunks([near, far], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], collection=collection)
+    add_chunks([near, far], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], vault="testvault", collection=collection)
 
     results = retrieve("query", client=cast(OpenAI, FakeClient([1.0, 0.0, 0.0])), collection=collection)
 
@@ -104,7 +104,7 @@ def test_retrieve_reports_real_distances_on_chromas_scale(collection: Collection
     same = make_chunk("notes/same.md", "", "identical vector")
     orthogonal = make_chunk("notes/orthogonal.md", "", "unrelated vector")
     add_chunks(
-        [same, orthogonal], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], collection=collection
+        [same, orthogonal], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], vault="testvault", collection=collection
     )
 
     results = retrieve("query", client=cast(OpenAI, FakeClient([1.0, 0.0, 0.0])), collection=collection)
@@ -116,7 +116,7 @@ def test_retrieve_reports_real_distances_on_chromas_scale(collection: Collection
 
 def test_retrieve_embeds_the_query_text_verbatim(collection: Collection):
     add_chunks(
-        [make_chunk("notes/a.md", "", "content")], [[1.0, 0.0, 0.0]], collection=collection
+        [make_chunk("notes/a.md", "", "content")], [[1.0, 0.0, 0.0]], vault="testvault", collection=collection
     )
     client = FakeClient()
 
@@ -127,7 +127,7 @@ def test_retrieve_embeds_the_query_text_verbatim(collection: Collection):
 
 def test_retrieve_respects_n_results(collection: Collection):
     chunks = [make_chunk(f"notes/{i}.md", "", f"content {i}") for i in range(5)]
-    add_chunks(chunks, [[float(i), 0.0, 0.0] for i in range(5)], collection=collection)
+    add_chunks(chunks, [[float(i), 0.0, 0.0] for i in range(5)], vault="testvault", collection=collection)
 
     results = retrieve(
         "query", n_results=2, client=cast(OpenAI, FakeClient([0.0, 0.0, 0.0])), collection=collection
@@ -138,7 +138,7 @@ def test_retrieve_respects_n_results(collection: Collection):
 
 def test_retrieve_returns_all_chunks_when_n_results_exceeds_collection_size(collection: Collection):
     add_chunks(
-        [make_chunk("notes/a.md", "", "only one")], [[1.0, 0.0, 0.0]], collection=collection
+        [make_chunk("notes/a.md", "", "only one")], [[1.0, 0.0, 0.0]], vault="testvault", collection=collection
     )
 
     results = retrieve(
@@ -152,3 +152,52 @@ def test_retrieve_on_an_empty_collection_returns_no_results(collection: Collecti
     results = retrieve("query", client=cast(OpenAI, FakeClient()), collection=collection)
 
     assert results == []
+
+
+def test_retrieve_carries_the_vault_through(collection: Collection):
+    add_chunks(
+        [make_chunk("notes/a.md", "", "content")],
+        [[1.0, 0.0, 0.0]],
+        vault="work",
+        collection=collection,
+    )
+
+    results = retrieve("query", client=cast(OpenAI, FakeClient()), collection=collection)
+
+    assert results[0].vault == "work"
+
+
+def test_retrieve_restricts_to_the_named_vaults(collection: Collection):
+    add_chunks(
+        [make_chunk("work/a.md", "", "work content")],
+        [[1.0, 0.0, 0.0]],
+        vault="work",
+        collection=collection,
+    )
+    add_chunks(
+        [make_chunk("personal/b.md", "", "personal content")],
+        [[1.0, 0.0, 0.0]],
+        vault="personal",
+        collection=collection,
+    )
+
+    results = retrieve(
+        "query", vaults=["personal"], client=cast(OpenAI, FakeClient()), collection=collection
+    )
+
+    assert [r.content for r in results] == ["personal content"]
+
+
+def test_chunks_indexed_before_vaults_were_recorded_still_load(collection: Collection):
+    """A collection predating the vault field must not break retrieval; those
+    chunks report an empty vault rather than raising."""
+    collection.upsert(
+        ids=["legacy"],
+        embeddings=[[1.0, 0.0, 0.0]],
+        documents=["legacy content"],
+        metadatas=[{"note_path": "old/a.md", "note_title": "a", "heading": ""}],
+    )
+
+    results = retrieve("query", client=cast(OpenAI, FakeClient()), collection=collection)
+
+    assert results[0].vault == ""
