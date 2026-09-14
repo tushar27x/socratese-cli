@@ -9,8 +9,10 @@ network, and has no assertions — a human reads the transcript and judges it.
 """
 from __future__ import annotations
 
+import re
 import sys
 import time
+from itertools import combinations
 
 from dotenv import load_dotenv
 
@@ -53,11 +55,72 @@ SCENARIOS: list[tuple[str, str, list[str]]] = [
         ["it stores documents as BSON in collections"],
     ),
     (
+        "9 over a long session — ten unhelpful answers",
+        "how does the attention mechanism work?",
+        [
+            "it decides what to focus on",
+            "the dot product tells you relevance",
+            "higher score means more important",
+            "not sure",
+            "you multiply Q and K",
+            "then you use V somehow",
+            "i think there is scaling involved",
+            "something about dividing by a square root",
+            "no idea what comes next",
+            "it produces the output vector",
+        ],
+    ),
+    (
         "gate — nothing in the vault covers this",
         "what is a vector database?",
         ["it stores embeddings so you can do similarity search"],
     ),
 ]
+
+
+STOPWORDS = {
+    "the", "a", "an", "what", "do", "does", "you", "your", "is", "are", "that",
+    "this", "it", "to", "of", "in", "and", "for", "on", "with", "when", "how",
+    "notes", "about", "at", "as", "be", "by", "from", "if", "or", "so", "but",
+}
+
+
+def _content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]+", text.lower()) if w not in STOPWORDS}
+
+
+STALL_WINDOW = 5
+
+
+def report_repetition(questions: list[str]) -> None:
+    """Rule 9 says never repeat a question. Two ways it can break.
+
+    Literal repeats show up as a high-overlap pair. The more interesting
+    failure is *orbiting*: the model keeps rewording the same unanswered
+    question, so no pair looks alike but a run of consecutive questions all
+    share the same few content words. Measured over a sliding window because
+    a long session only fails this way near the end.
+    """
+    pairs = [
+        (i + 1, j + 1, overlap)
+        for (i, a), (j, b) in combinations(list(enumerate(questions)), 2)
+        if (union := _content_words(a) | _content_words(b))
+        and (overlap := len(_content_words(a) & _content_words(b)) / len(union)) > 0.5
+    ]
+    for i, j, overlap in pairs:
+        print(f"  RULE 9 — Q{i} and Q{j} share {overlap:.0%} of their words")
+
+    stalled = False
+    for lo in range(len(questions) - STALL_WINDOW + 1):
+        window = questions[lo : lo + STALL_WINDOW]
+        shared = set.intersection(*(_content_words(q) for q in window))
+        if shared:
+            stalled = True
+            terms = ", ".join(sorted(shared))
+            print(f"  STALLED — Q{lo + 1}-Q{lo + STALL_WINDOW} all circle: {terms}")
+
+    if not pairs and not stalled:
+        print("  rule 9 ok — no repeats, no stalled run")
 
 
 def run(label: str, topic: str, answers: list[str]) -> None:
@@ -77,14 +140,18 @@ def run(label: str, topic: str, answers: list[str]) -> None:
         return
 
     started = time.perf_counter()
-    print(f"\n  Q1  {session.opening_question()}")
+    questions = [session.opening_question()]
+    print(f"\n  Q1  {questions[0]}")
 
     for turn, answer in enumerate(answers, start=2):
         print(f"\n  >   {answer}")
-        print(f"\n  Q{turn}  {session.answer(answer)}")
+        questions.append(session.answer(answer))
+        print(f"\n  Q{turn}  {questions[-1]}")
 
     elapsed = time.perf_counter() - started
-    print(f"\n  [{len(answers) + 1} turns, {elapsed:.1f}s]\n")
+    print(f"\n  [{len(questions)} turns, {elapsed:.1f}s]")
+    report_repetition(questions)
+    print()
 
 
 def main(argv: list[str]) -> None:
