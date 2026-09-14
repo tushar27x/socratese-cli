@@ -63,9 +63,13 @@ def wired(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 
 def written(app: SocrateseApp) -> str:
-    """Everything the conversation pane has shown, as plain text."""
+    """Everything the conversation pane has shown, as plain text.
+
+    Strip.text, not str(strip): the repr is a list of Segments, so a phrase
+    spanning two styles never appears literally and assertions pass vacuously.
+    """
     log = app.query_one("#log", RichLog)
-    return "\n".join(str(line) for line in log.lines)
+    return "\n".join(strip.text for strip in log.lines)
 
 
 async def submit(pilot: object, app: SocrateseApp, text: str) -> None:
@@ -227,3 +231,84 @@ async def test_it_uses_the_terminals_own_ansi_palette(wired: Path):
     Textual's."""
     async with SocrateseApp().run_test() as pilot:
         assert pilot.app.ansi_color is True
+
+
+async def test_an_answer_is_echoed_into_the_transcript(wired: Path):
+    """Without the echo the pane shows only questions, which reads as a list
+    of demands rather than a conversation."""
+    async with SocrateseApp().run_test() as pilot:
+        app = pilot.app
+        await submit(pilot, app, "/ask redis")  # type: ignore[arg-type]
+        await pilot.pause()
+
+        await submit(pilot, app, "the parent keeps serving writes")  # type: ignore[arg-type]
+        await pilot.pause()
+
+        transcript = written(app)  # type: ignore[arg-type]
+        assert "the parent keeps serving writes" in transcript
+        assert transcript.index("Q1?") < transcript.index("the parent keeps serving writes")
+
+
+async def test_the_echo_comes_before_the_next_question(wired: Path):
+    async with SocrateseApp().run_test() as pilot:
+        app = pilot.app
+        await submit(pilot, app, "/ask redis")  # type: ignore[arg-type]
+        await pilot.pause()
+        await submit(pilot, app, "my answer")  # type: ignore[arg-type]
+        await pilot.pause()
+
+        transcript = written(app)  # type: ignore[arg-type]
+        assert transcript.index("my answer") < transcript.index("Q2?")
+
+
+async def test_commands_are_not_echoed_as_answers(wired: Path):
+    """A command is an instruction, not part of the conversation; echoing it
+    would put '/help' in the middle of a transcript."""
+    async with SocrateseApp().run_test() as pilot:
+        app = pilot.app
+        await submit(pilot, app, "/help")  # type: ignore[arg-type]
+
+        assert "> /help" not in written(app)  # type: ignore[arg-type]
+
+
+async def test_the_input_has_a_suggester_attached(wired: Path):
+    async with SocrateseApp().run_test() as pilot:
+        assert pilot.app.query_one("#entry", Input).suggester is not None
+
+
+async def test_slash_commands_are_suggested_as_you_type(wired: Path):
+    async with SocrateseApp().run_test() as pilot:
+        suggester = pilot.app.query_one("#entry", Input).suggester
+        assert suggester is not None
+
+        for typed, expected in [
+            ("/a", "/ask"),
+            ("/re", "/resume"),
+            ("/s", "/sources"),
+            ("/v", "/vaults"),
+        ]:
+            assert await suggester.get_suggestion(typed) == expected
+
+
+async def test_suggestions_are_case_insensitive(wired: Path):
+    async with SocrateseApp().run_test() as pilot:
+        suggester = pilot.app.query_one("#entry", Input).suggester
+        assert suggester is not None
+
+        assert await suggester.get_suggestion("/AS") == "/ask"
+
+
+async def test_plain_text_gets_no_suggestion(wired: Path):
+    """Answers are prose; ghost-text completions over them would be noise."""
+    async with SocrateseApp().run_test() as pilot:
+        suggester = pilot.app.query_one("#entry", Input).suggester
+        assert suggester is not None
+
+        assert await suggester.get_suggestion("the parent keeps") is None
+
+
+async def test_every_command_is_offered(wired: Path):
+    """A command absent from the list is undiscoverable without /help."""
+    from socratese.tui.commands import COMMANDS, SUGGESTIONS
+
+    assert set(SUGGESTIONS) == {f"/{c.name}" for c in COMMANDS}

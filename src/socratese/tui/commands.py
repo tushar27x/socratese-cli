@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from textual.suggester import Suggester
+
 
 @dataclass(frozen=True)
 class Command:
@@ -72,3 +74,31 @@ def unknown_command_hint(name: str) -> str:
     if candidates:
         return f"Unknown command /{name}. Did you mean /{candidates[0]}?"
     return f"Unknown command /{name}. Type /help to see what is available."
+
+
+#: What the input offers as you type. Ordered so the most-used commands win a
+#: shared prefix — "/a" completes to /ask, not /add.
+SUGGESTIONS: tuple[str, ...] = tuple(f"/{command.name}" for command in COMMANDS)
+
+
+class SlashCommandSuggester(Suggester):
+    """Ghost-text completion for /commands, regardless of case.
+
+    Not SuggestFromList: its `case_sensitive=False` does not match a
+    differently-cased prefix in the installed Textual (`/A` suggests nothing),
+    and `parse` accepts any case, so the suggestion should too.
+    """
+
+    def __init__(self, suggestions: tuple[str, ...] = SUGGESTIONS) -> None:
+        super().__init__(use_cache=False, case_sensitive=False)
+        self.suggestions = suggestions
+
+    async def get_suggestion(self, value: str) -> str | None:
+        # Folded here rather than relying on case_sensitive=False: that only
+        # folds on the path through the caching wrapper, so a direct call --
+        # including from a test -- would otherwise behave differently from the
+        # widget.
+        folded = value.casefold()
+        if not folded.startswith("/"):
+            return None
+        return next((s for s in self.suggestions if s.startswith(folded)), None)

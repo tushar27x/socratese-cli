@@ -25,7 +25,12 @@ from socratese.dialogue.stall import is_stalled, orbiting_terms
 from socratese.history.models import SessionRecord
 from socratese.history.recorder import SessionRecorder, recording, resuming
 from socratese.history.store import connect, load_session, recent_sessions
-from socratese.tui.commands import COMMANDS, parse, unknown_command_hint
+from socratese.tui.commands import (
+    COMMANDS,
+    SlashCommandSuggester,
+    parse,
+    unknown_command_hint,
+)
 
 BANNER = "Socratese — you answer, it asks. /help for commands."
 
@@ -80,7 +85,11 @@ class SocrateseApp(App[None]):
         # No Header or Footer: both paint a solid bar, and a docked Footer
         # competes with the input for the bottom rows and clips its border.
         yield RichLog(id="log", wrap=True, markup=True, highlight=False)
-        yield Input(placeholder="Type an answer, or /help", id="entry")
+        yield Input(
+            placeholder="Type an answer, or /help",
+            id="entry",
+            suggester=SlashCommandSuggester(),
+        )
 
     def on_mount(self) -> None:
         self.title = "socratese"
@@ -101,6 +110,15 @@ class SocrateseApp(App[None]):
     def say_error(self, message: str) -> None:
         self.say(f"[ansi_red]{message}[/ansi_red]")
 
+    def say_answer(self, text: str) -> None:
+        """Echo what the user typed.
+
+        Without this the pane shows only questions, which reads as a list of
+        demands rather than a conversation — and makes a resumed transcript
+        impossible to follow.
+        """
+        self.say(f"[dim]>[/dim] {text}")
+
     # --- input ----------------------------------------------------------
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -111,6 +129,7 @@ class SocrateseApp(App[None]):
             return
 
         if not parsed.is_command:
+            self.say_answer(parsed.text)
             self.answer(parsed.text)
             return
 
@@ -370,8 +389,8 @@ class SocrateseApp(App[None]):
         self.call_from_thread(self.say, f"\n[dim]Resuming {record.id}: {record.topic}[/dim]")
         for turn in record.turns:
             if turn.answer:
-                self.call_from_thread(self.say, f"  [dim]Q{turn.ordinal}[/dim] {turn.question}")
-                self.call_from_thread(self.say, f"  [dim]  >[/dim] {turn.answer}")
+                self.call_from_thread(self.say, f"[dim]{turn.question}[/dim]")
+                self.call_from_thread(self.say_answer, turn.answer)
 
         last = record.turns[-1] if record.turns else None
         if last is None:

@@ -1,5 +1,11 @@
 # tests/tui/test_commands.py
-from socratese.tui.commands import BY_NAME, COMMANDS, parse, unknown_command_hint
+from socratese.tui.commands import (
+    BY_NAME,
+    COMMANDS,
+    SlashCommandSuggester,
+    parse,
+    unknown_command_hint,
+)
 
 
 def test_a_leading_slash_makes_a_command():
@@ -71,3 +77,53 @@ def test_a_typo_suggests_the_closest_command():
 
 def test_an_unrecognisable_command_points_at_help():
     assert "/help" in unknown_command_hint("zzzz")
+
+
+# --- suggestions --------------------------------------------------------------
+
+
+async def test_a_prefix_completes_to_the_first_matching_command():
+    suggester = SlashCommandSuggester()
+
+    assert await suggester.get_suggestion("/a") == "/ask"
+    assert await suggester.get_suggestion("/re") == "/resume"
+    assert await suggester.get_suggestion("/v") == "/vaults"
+
+
+async def test_suggestions_ignore_case():
+    """parse() accepts /ASK, so the suggestion has to as well — otherwise the
+    completion vanishes the moment caps lock is on."""
+    suggester = SlashCommandSuggester()
+
+    assert await suggester.get_suggestion("/A") == "/ask"
+    assert await suggester.get_suggestion("/RESUME") == "/resume"
+
+
+async def test_prose_is_never_completed():
+    """Answers are prose; ghost text over them would be noise."""
+    suggester = SlashCommandSuggester()
+
+    assert await suggester.get_suggestion("the parent keeps serving") is None
+    assert await suggester.get_suggestion("a") is None
+
+
+async def test_an_unmatched_command_suggests_nothing():
+    assert await SlashCommandSuggester().get_suggestion("/zzz") is None
+
+
+async def test_a_bare_slash_offers_the_first_command():
+    assert await SlashCommandSuggester().get_suggestion("/") == "/ask"
+
+
+async def test_every_command_is_reachable_by_its_own_name():
+    """A command shadowed by an earlier prefix match would be uncompletable."""
+    suggester = SlashCommandSuggester()
+
+    for command in COMMANDS:
+        assert await suggester.get_suggestion(f"/{command.name}") == f"/{command.name}"
+
+
+async def test_an_empty_input_suggests_nothing():
+    """Every command starts with "/", so an empty prefix matches them all —
+    without a guard the box would sit there proposing /ask before you type."""
+    assert await SlashCommandSuggester().get_suggestion("") is None
