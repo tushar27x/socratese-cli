@@ -1,6 +1,6 @@
 # Socratese — Progress
 
-Last updated: 2026-09-14
+Last updated: 2026-09-14 (phase-5-polish branch)
 
 Status/continuity doc for picking this project back up in a new session.
 For *why* decisions were made, see `CLAUDE.md` section 5 (the living
@@ -179,7 +179,8 @@ against the real vault. No CLI surface yet.**
   blocks; the heading-less case renders the title alone, with no dangling
   em dash.
 - `src/socratese/dialogue/socratic.py` — `get_client()` /
-  `ask_questions(topic, chunks, client=None) -> str`. Filters chunks by
+  `ask_questions(topic, chunks, client=None) -> str` *(since removed —
+  `Session` subsumed it; see Phase 5/6 below)*. Filters chunks by
   `RELEVANCE_THRESHOLD = 1.2` (inclusive `<=`), then makes one Anthropic
   call. Returns `"No relevant notes found."` when nothing passes the gate —
   **note this is a plain `str`, indistinguishable by type from a real
@@ -236,8 +237,8 @@ and used against the real vault.**
 - `SYSTEM_PROMPT` gained rules 6-9 for the conversation half: never confirm or
   deny, never correct a contradiction directly, never answer even on "I don't
   know", never repeat a question.
-- `ask_questions()` (single-shot) still exists and is still tested, but now has
-  **no callers**. It is the obvious thing to collapse into `Session` next.
+- `ask_questions()` (single-shot) was left in place at this point with no
+  callers, and removed in the following commit — see Phase 5/6 below.
 
 Three bugs found in review of the first multi-turn draft, all worth knowing:
 1. The CLI still called `ask_questions()` for the opening question, so
@@ -274,13 +275,12 @@ Opus, and it did not happen.
 excerpts. Partial answers and surrender are covered; a confidently wrong
 answer is not.
 
-Tests: 112 passing, mirroring source structure under `tests/` —
+Tests: 102 passing, mirroring source structure under `tests/` —
 `vault/test_models.py`, `test_config.py`, `vault/test_discovery.py`,
 `cli/test_vault.py`, `cli/test_index.py`, `ingest/test_parser.py`,
 `chunking/test_chunker.py`, `embedding/test_embedder.py`,
 `vectorstore/test_store.py`, `retrieval/test_retriever.py`,
-`dialogue/test_prompt.py`, `dialogue/test_socratic.py`,
-`dialogue/test_session.py`.
+`dialogue/test_prompt.py`, `dialogue/test_socratic.py`.
 Config/vault tests use `monkeypatch` on `config.get_config_path` to avoid
 touching the real `~/.config/socratese/config.toml`. CLI tests use
 `typer.testing.CliRunner`. Ingest/chunking tests use pytest's `tmp_path`
@@ -347,7 +347,7 @@ always rendered, excerpts joined with a single newline), each breaking
 exactly one test. One-failure-each is the signal worth having: no test is
 redundant, none so broad it catches everything.
 
-`dialogue/test_session.py` (18 tests) drives `Session` through a fake client
+`dialogue/test_socratic.py` drives `Session` through a fake client
 that **snapshots** each call's message list rather than storing the reference
 — the session passes `self.messages` by value-of-reference and keeps mutating
 it, so an aliasing fake makes every turn look identical. (Found by a test
@@ -383,6 +383,34 @@ currently only in shell history. Note that a heredoc version needs
 `find_dotenv()`, which walks the stack for the calling *file's* directory
 and asserts when run from stdin.
 
+**Phase 5/6 (partial): evaluation harness, README, cleanup.**
+
+- `scripts/eval_dialogue.py` — drives scripted conversations through `Session`
+  so the prompt rules are judged against transcripts rather than vibes. Four
+  scenarios: an answer contradicting the notes (rule 7), a surrender (rule 8),
+  three vague answers in a row (rules 6 and 9), and a topic the vault does not
+  cover (the relevance gate). `python scripts/eval_dialogue.py 7` runs one.
+  ~8 API calls for a full sweep, Haiku, well under a cent.
+- **Rule 7 verified — the last untested rule.** A scripted answer describing
+  AOF behaviour as RDB drew a question pointing at the contradicting passage,
+  not a correction. Phase 4's remaining risk is closed.
+- **A tenth prompt rule was drafted, measured twice, and rejected** — see the
+  decisions log. Net effect of the exercise: the prompt is unchanged at 9
+  rules, but now with evidence behind that rather than assumption.
+- `ask_questions()` removed; `Session` subsumed it. `test_session.py` merged
+  back into `test_socratic.py` so tests mirror source one-to-one.
+- `README.md` written — the repo now has a front door, leading with a real
+  transcript. This was the most visible remaining gap.
+- `socratese index` had no help text (the only command missing a docstring);
+  added.
+
+**Known retrieval wart, not yet acted on:** "Redis — Run with docker" scores
+0.807 on "how does redis persist data to disk?" and passes the gate. It is
+about Docker, not persistence. The gate is distance-based only, so an
+on-topic-ish note from the right *area* clears it. Has not visibly hurt
+question quality — the model ignores the irrelevant excerpt — but it is the
+first evidence that a 1.2 cutoff is doing less work than the numbers suggest.
+
 ## Not built yet (known gaps, deliberately deferred)
 
 - `vault add` with no `PATH` argument — currently `PATH` is required.
@@ -394,12 +422,6 @@ and asserts when run from stdin.
   first-run setup. `discovery.find_vaults()` supports this (just needs
   a root passed in), but nothing calls it with those default roots yet.
 - Chunker has no general max-chunk-size fallback (see above).
-- No `README.md` in the repo at all. The remote (`origin/main`) is
-  therefore a portfolio repo with no front door — the most visible
-  remaining doc gap. Open question, not yet decided: write a minimal one
-  now (setup + `vault add` → `index`, i.e. what actually works today),
-  or wait until `ask` exists so it can document a real end-to-end flow
-  instead of being rewritten at Phase 4.
 - **No Textual app.** `ask` is a plain `console.input()` REPL loop. The
   decisions log still commits to Textual for the polished UX; `Session`
   holding the state is what makes that a UI change rather than an
@@ -410,41 +432,35 @@ and asserts when run from stdin.
   should not be relaxed to fix this. More likely an end-of-session
   affordance — on exit, print which notes you struggled with so you know
   what to go re-read. `--sources` is already half of that.
-- **`ask_questions()` has no callers.** `Session` subsumed it. It is still
-  tested and works, kept as a fallback while the session proves out; the
-  obvious next cleanup is collapsing it into `Session`.
 - **Provider fallback designed but not built** — see the decisions log for
   the adapter shape and why it was deferred rather than built when the
   Anthropic balance ran out. Note it would change `Session`'s constructor
-  and return types, rewriting much of `dialogue/test_session.py`.
-- **Prompt is untuned, and rule 7 is untested.** Multi-turn behaviour is now
-  verified for partial answers and for "I don't know" (see above), but not
-  for a confidently *wrong* answer that contradicts the excerpts. No
-  systematic sweep has been run at all.
+  and return types, rewriting much of `dialogue/test_socratic.py`.
+- **Prompt is evaluated but not tuned.** All nine rules now have transcript
+  evidence. No change has been made as a result — the one change attempted was
+  measured and reverted. Longer sessions (past 4 turns) remain unexplored.
 - `scripts/eval_dialogue.py` doesn't exist yet (see above).
 
 ## Next step
 
-1. **Save `scripts/eval_dialogue.py` and run a real evaluation.** Now the
-   cheapest *and* most overdue thing: `ask` exists, so the sweep is just the
-   command in a loop. Priorities, in order: rule 7 (answer something that
-   contradicts your notes — does it correct you, or send you back to the
-   passage?), then thin-notes topics where rule 3 should crack first, then
-   longer sessions to see whether question quality degrades past turn 4.
-   Belongs in `scripts/`, never `tests/` — it costs money, hits the network,
-   and needs a human to judge the output, so letting `pytest` collect it
-   would make the suite bill you.
-2. **Collapse `ask_questions()` into `Session`.** It has no callers. Doing it
-   before the provider fallback avoids changing the same signatures twice.
-3. **Textual app for `ask`** — a UI change now, not an architecture one.
-   Scrollback, a fixed input pane, and somewhere to surface `--sources`
-   without it interrupting the conversation.
-4. **README.md.** The original reason to wait was "until `ask` exists so it
-   can document a real end-to-end flow." That condition is now met, and the
-   repo still has no front door. The architecture diagram drafted as an
-   artifact is meant to seed its architecture section.
+1. **Textual app for `ask`.** The decisions log has committed to this since
+   the start, and it is now a UI change rather than an architecture one —
+   `Session` already holds the state. Wants scrollback, a fixed input pane,
+   and somewhere to show `--sources` without interrupting the conversation.
+2. **A completion state for sessions.** Prompt rule 6 means the tutor never
+   says "you've got it," so a conversation funnels forever. Do *not* relax
+   rule 6 to fix this — it is doing real work. More likely an end-of-session
+   summary naming the notes you struggled with, so you know what to re-read.
+   `--sources` is already half of it.
+3. **`init` command / `vault add` with no PATH.** The last two pieces of the
+   original first-run UX. `discovery.find_vaults()` already supports it; it
+   just needs calling with OS-conventional roots.
+4. **Longer-session evaluation.** Every transcript so far stops at 4 turns.
+   Whether question quality holds at 10 is unknown, and it is the most likely
+   place for the conversation to start circling.
 5. **Provider fallback** (`dialogue/providers.py`) when actually wanted —
-   shape already decided, see the decisions log.
+   shape already decided, see the decisions log. Would change `Session`'s
+   constructor and return types.
 6. Consider whether `.trash` history is worth also purging from the vault
    config over time, or whether excluding it at parse-time is sufficient
    forever — not urgent, just a possible future edge case.

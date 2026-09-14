@@ -74,3 +74,4 @@ def test_system_prompt_carries_the_load_bearing_rules():
     assert "Never state the answer" in SYSTEM_PROMPT
     assert "BAD:" in SYSTEM_PROMPT and "GOOD:" in SYSTEM_PROMPT
     assert "Never answer" in SYSTEM_PROMPT
+    assert "Never confirm or deny" in SYSTEM_PROMPT

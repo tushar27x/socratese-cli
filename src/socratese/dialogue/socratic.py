@@ -9,34 +9,12 @@ RELEVANCE_THRESHOLD = 1.2
 DEFAULT_MODEL = "claude-haiku-4-5"
 
 
-
 def get_client() -> Anthropic:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY enviornment variable not found.")
+        raise ValueError("ANTHROPIC_API_KEY environment variable not found.")
 
     return Anthropic(api_key=api_key)
-
-def ask_questions(
-        topic: str,
-        chunks: list[RetrievedChunk],
-        client: Anthropic | None=None
-) -> str | None:
-    relevant = [c for c in chunks if c.distance <= RELEVANCE_THRESHOLD]
-
-    if not relevant:
-        return None
-
-    client = client or get_client()
-    res = client.messages.create(
-        model = os.environ.get("DIALOGUE_MODEL", DEFAULT_MODEL),
-        max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": build_user_turn(topic, relevant)}]
-    )
-    return "".join(
-        block.text for block in res.content if block.type=="text"
-    ).strip()
 
 class Session:
     """A running conversation about one topic, grounded in one set of chunks.
@@ -58,6 +36,7 @@ class Session:
             self._client = get_client()
 
         return self._client
+
     @property
     def has_grounding(self) -> bool:
         return bool(self.chunks)
@@ -69,12 +48,11 @@ class Session:
 
         return self._next_turn()
 
-    def answer(self, response:str) -> str:
+    def answer(self, response: str) -> str:
         """Submit the user's answer, get the follow-up question."""
         self.messages.append({"role": "user", "content": response})
         return self._next_turn()
 
-    
     def _next_turn(self) -> str:
         res = self.client.messages.create(
             model=os.environ.get("DIALOGUE_MODEL", DEFAULT_MODEL),
@@ -86,4 +64,3 @@ class Session:
         text: str = "".join(b.text for b in res.content if b.type == "text").strip()
         self.messages.append({"role": "assistant", "content": text})
         return text
-    

@@ -47,6 +47,7 @@ def index(
             ..., help="Name of the vault to index, or 'all' to index every tracked vault"
         )
 ) -> None:
+    """Parse, chunk, embed and store a vault's notes."""
     vaults = load_vaults()
     if not vaults:
         console.print("No vaults indexed. Run [bold]socratese vault add[/bold] first.")
