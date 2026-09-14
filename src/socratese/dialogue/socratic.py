@@ -30,6 +30,29 @@ class Session:
         self._client = client
         self.messages: list[MessageParam] = []
 
+    @classmethod
+    def from_messages(
+        cls,
+        topic: str,
+        chunks: list[RetrievedChunk],
+        messages: list[MessageParam],
+        client: Anthropic | None = None,
+    ) -> "Session":
+        """Rebuild a session mid-conversation from stored state.
+
+        Chunks come from storage rather than a fresh retrieval: the messages
+        already refer to those specific excerpts, so re-retrieving after a
+        re-index could swap them out and leave the transcript incoherent.
+
+        The chunks are taken as given — they were filtered by the threshold
+        when the session first started, and re-filtering here would silently
+        drop notes the conversation has already been quoting.
+        """
+        session = cls(topic, [], client=client)
+        session.chunks = list(chunks)
+        session.messages = list(messages)
+        return session
+
     @property
     def client(self) -> Anthropic:
         if self._client is None:
