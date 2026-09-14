@@ -9,7 +9,6 @@ network, and has no assertions — a human reads the transcript and judges it.
 """
 from __future__ import annotations
 
-import re
 import sys
 import time
 from itertools import combinations
@@ -22,6 +21,11 @@ from socratese.dialogue.socratic import (  # noqa: E402
     DEFAULT_MODEL,
     RELEVANCE_THRESHOLD,
     Session,
+)
+from socratese.dialogue.stall import (  # noqa: E402
+    content_words,
+    is_stalled,
+    orbiting_terms,
 )
 from socratese.retrieval.retriever import retrieve  # noqa: E402
 
@@ -71,6 +75,23 @@ SCENARIOS: list[tuple[str, str, list[str]]] = [
         ],
     ),
     (
+        "3 and 8 — the notes do not contain the answer",
+        "how does react.js make use of the virtual DOM?",
+        [
+            # a real transcript: the notes describe what the virtual DOM is for
+            # but never mention diffing two virtual trees, so no answer the user
+            # gives can satisfy a question driving at reconciliation
+            "It compares changes with the real DOM and only apply changes to the "
+            "components where changes are present rather than re-rendering the whole page",
+            "for monitoring changes in the specific changes in the DOM tree. it only "
+            "updates the components (nodes) which need updating",
+            "I don't know.",
+            "the change would appear in the virtual DOM first",
+            "since virtual DOM is a copy of the original DOM, it can monitor what "
+            "changed in the virtual dom and only render the required change",
+        ],
+    ),
+    (
         "gate — nothing in the vault covers this",
         "what is a vector database?",
         ["it stores embeddings so you can do similarity search"],
@@ -78,48 +99,30 @@ SCENARIOS: list[tuple[str, str, list[str]]] = [
 ]
 
 
-STOPWORDS = {
-    "the", "a", "an", "what", "do", "does", "you", "your", "is", "are", "that",
-    "this", "it", "to", "of", "in", "and", "for", "on", "with", "when", "how",
-    "notes", "about", "at", "as", "be", "by", "from", "if", "or", "so", "but",
-}
-
-
-def _content_words(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z]+", text.lower()) if w not in STOPWORDS}
-
-
-STALL_WINDOW = 5
-
-
-def report_repetition(questions: list[str]) -> None:
+def report_repetition(questions: list[str], topic: str) -> None:
     """Rule 9 says never repeat a question. Two ways it can break.
 
     Literal repeats show up as a high-overlap pair. The more interesting
-    failure is *orbiting*: the model keeps rewording the same unanswered
-    question, so no pair looks alike but a run of consecutive questions all
-    share the same few content words. Measured over a sliding window because
-    a long session only fails this way near the end.
+    failure is *orbiting* — the model rewording one unanswered question so no
+    pair looks alike. That detection now lives in the app (dialogue/stall.py),
+    since the CLI warns the user about it live; this only reports it.
     """
     pairs = [
         (i + 1, j + 1, overlap)
         for (i, a), (j, b) in combinations(list(enumerate(questions)), 2)
-        if (union := _content_words(a) | _content_words(b))
-        and (overlap := len(_content_words(a) & _content_words(b)) / len(union)) > 0.5
+        if (union := content_words(a) | content_words(b))
+        and (overlap := len(content_words(a) & content_words(b)) / len(union)) > 0.5
     ]
     for i, j, overlap in pairs:
         print(f"  RULE 9 — Q{i} and Q{j} share {overlap:.0%} of their words")
 
-    stalled = False
-    for lo in range(len(questions) - STALL_WINDOW + 1):
-        window = questions[lo : lo + STALL_WINDOW]
-        shared = set.intersection(*(_content_words(q) for q in window))
-        if shared:
-            stalled = True
-            terms = ", ".join(sorted(shared))
-            print(f"  STALLED — Q{lo + 1}-Q{lo + STALL_WINDOW} all circle: {terms}")
-
-    if not pairs and not stalled:
+    stalled_at = next(
+        (n for n in range(1, len(questions) + 1) if is_stalled(questions[:n], topic)), None
+    )
+    if stalled_at:
+        terms = ", ".join(sorted(orbiting_terms(questions[:stalled_at], topic)))
+        print(f"  STALLED from Q{stalled_at} — circling: {terms}")
+    elif not pairs:
         print("  rule 9 ok — no repeats, no stalled run")
 
 
@@ -150,7 +153,7 @@ def run(label: str, topic: str, answers: list[str]) -> None:
 
     elapsed = time.perf_counter() - started
     print(f"\n  [{len(questions)} turns, {elapsed:.1f}s]")
-    report_repetition(questions)
+    report_repetition(questions, topic)
     print()
 
 

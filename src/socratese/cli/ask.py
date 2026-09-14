@@ -10,6 +10,7 @@ from rich.panel import Panel
 
 from socratese.config import load_vaults
 from socratese.dialogue.socratic import DEFAULT_MODEL, Session
+from socratese.dialogue.stall import is_stalled, orbiting_terms
 from socratese.history.recorder import SessionRecorder, recording, resuming
 from socratese.history.store import connect, load_session, recent_sessions
 from socratese.retrieval.retriever import retrieve
@@ -17,24 +18,44 @@ from socratese.retrieval.retriever import retrieve
 console = Console()
 
 
-def _print_sources(session: Session) -> None:
-    console.print("\n[dim]Grounded in:[/dim]")
+def _print_sources(session: Session, stalled: bool = False) -> None:
+    if stalled:
+        console.print(
+            "\n[yellow]Worth re-reading — and possibly filling in:[/yellow]"
+        )
+    else:
+        console.print("\n[dim]Grounded in:[/dim]")
     for chunk in session.chunks:
         label = f"{chunk.note_title} — {chunk.heading}" if chunk.heading else chunk.note_title
         console.print(f"  [dim]{chunk.distance:.3f}  {label}[/dim]")
 
 
-def _converse(session: Session, history: SessionRecorder, question: str) -> None:
+def _converse(session: Session, history: SessionRecorder, question: str) -> bool:
     """Run the question/answer loop until the user stops or the API fails.
 
     Shared by `ask` and `resume` — the only difference between them is how the
-    session and its opening question are obtained.
+    session and its opening question are obtained. Returns whether the
+    conversation ever stalled, which decides if the notes are revealed at the end.
     """
     console.print("\n[dim]Answer in your own words. Blank line to end.[/dim]")
+
+    asked = [question]
+    warned = False
 
     while True:
         console.print()
         console.print(Panel(question, border_style="cyan", padding=(1, 2)))
+
+        if not warned and is_stalled(asked, session.topic):
+            terms = ", ".join(f"'{t}'" for t in sorted(orbiting_terms(asked, session.topic)))
+            console.print(
+                f"\n[yellow]These last few questions are all circling {terms}.[/yellow]"
+            )
+            console.print(
+                "[dim]That usually means your notes don't settle what it's driving at."
+                "\nKeep going if you want, or press enter to stop and see the notes.[/dim]"
+            )
+            warned = True
 
         try:
             reply = console.input("\n[bold cyan]>[/bold cyan] ").strip()
@@ -55,6 +76,9 @@ def _converse(session: Session, history: SessionRecorder, question: str) -> None
             break
 
         history.question(question, session.messages)
+        asked.append(question)
+
+    return warned
 
 
 def ask(
@@ -96,12 +120,12 @@ def ask(
             raise typer.Exit(code=1)
 
         history.question(question, session.messages)
-        _converse(session, history, question)
+        stalled = _converse(session, history, question)
 
     console.print("\n[dim]Session ended.[/dim]")
 
-    if sources:
-        _print_sources(session)
+    if sources or stalled:
+        _print_sources(session, stalled=stalled)
 
 
 def resume(
@@ -169,9 +193,9 @@ def resume(
                 raise typer.Exit(code=1)
             history.question(question, session.messages)
 
-        _converse(session, history, question)
+        stalled = _converse(session, history, question)
 
     console.print("\n[dim]Session ended.[/dim]")
 
-    if sources:
-        _print_sources(session)
+    if sources or stalled:
+        _print_sources(session, stalled=stalled)
