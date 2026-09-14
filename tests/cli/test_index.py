@@ -29,9 +29,17 @@ def fake_embed_chunks(chunks: list[Chunk], client: OpenAI | None = None) -> list
     return [[0.1, 0.2, 0.3] for _chunk in chunks]
 
 
+#: Vault names seen by the fake store, so tests can assert chunks are tagged.
+tagged_vaults: list[str] = []
+
+
 def fake_add_chunks(
-    chunks: list[Chunk], embeddings: list[list[float]], collection: Collection | None = None
+    chunks: list[Chunk],
+    embeddings: list[list[float]],
+    vault: str,
+    collection: Collection | None = None,
 ) -> None:
+    tagged_vaults.append(vault)
     pass  # no-op; real storage is store.py's concern, already tested there
 
 
@@ -132,3 +140,18 @@ def test_index_api_error_stops_and_preserves_prior_progress(tmp_path: Path, monk
     saved = {v.name: v for v in config.load_vaults()}
     assert saved["vault_a"].last_indexed is not None  # succeeded before the failure
     assert saved["vault_b"].last_indexed is None  # never got there
+
+
+def test_indexing_tags_chunks_with_the_vault_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Untagged chunks are invisible to vault filtering, so a session scoped to
+    a vault would silently find nothing."""
+    tagged_vaults.clear()
+    vault = make_vault(tmp_path, "mynotes", {"a.md": "# Heading\n\nbody"})
+    monkeypatch.setattr(config, "get_config_path", lambda: tmp_path / "config.toml")
+    config.save_vaults([vault])
+    monkeypatch.setattr(index_module, "embed_chunks", fake_embed_chunks)
+    monkeypatch.setattr(index_module, "add_chunks", fake_add_chunks)
+
+    runner.invoke(app, ["index", "mynotes"])
+
+    assert tagged_vaults == ["mynotes"]

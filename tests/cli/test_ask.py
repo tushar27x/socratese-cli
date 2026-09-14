@@ -67,7 +67,9 @@ def wired(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(config, "get_config_path", lambda: tmp_path / "config.toml")
     config.save_vaults([Vault(name="v", path=tmp_path, last_indexed=datetime.now(timezone.utc))])
 
-    def fake_retrieve(topic: str, n_results: int = 5) -> list[RetrievedChunk]:
+    def fake_retrieve(
+        topic: str, n_results: int = 5, vaults: list[str] | None = None
+    ) -> list[RetrievedChunk]:
         return [make_chunk()]
 
     monkeypatch.setattr(ask_module, "retrieve", fake_retrieve)
@@ -91,7 +93,9 @@ def test_refuses_when_no_vault_has_been_indexed(monkeypatch: pytest.MonkeyPatch,
 def test_refuses_when_nothing_clears_the_relevance_gate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, wired: Path
 ):
-    def nothing_relevant(topic: str, n_results: int = 5) -> list[RetrievedChunk]:
+    def nothing_relevant(
+        topic: str, n_results: int = 5, vaults: list[str] | None = None
+    ) -> list[RetrievedChunk]:
         return [make_chunk(distance=1.4)]
 
     monkeypatch.setattr(ask_module, "retrieve", nothing_relevant)
@@ -160,3 +164,44 @@ def test_the_raw_conversation_is_stored_for_replay(wired: Path):
     assert [m["role"] for m in record.messages] == ["user", "assistant", "user", "assistant"]
     assert record.messages[2]["content"] == "my answer"
     conn.close()
+
+
+def test_an_unknown_vault_is_rejected_with_the_real_names(wired: Path):
+    """Silently searching everything when a filter was asked for would be worse
+    than failing — the user would think they had scoped the session."""
+    result = runner.invoke(app, ["ask", "redis", "--vault", "typo"])
+
+    assert result.exit_code == 1
+    assert "No indexed vault named typo" in result.output
+    assert "v" in result.output  # names the vault that does exist
+
+
+def test_vault_filters_are_passed_through_to_retrieval(
+    monkeypatch: pytest.MonkeyPatch, wired: Path
+):
+    seen: dict[str, object] = {}
+
+    def spy(topic: str, n_results: int = 5, vaults: list[str] | None = None) -> list[RetrievedChunk]:
+        seen["vaults"] = vaults
+        return [make_chunk()]
+
+    monkeypatch.setattr(ask_module, "retrieve", spy)
+
+    runner.invoke(app, ["ask", "redis", "--vault", "v"], input="\n")
+
+    assert seen["vaults"] == ["v"]
+
+
+def test_no_vault_flag_searches_everything(monkeypatch: pytest.MonkeyPatch, wired: Path):
+    """An empty list must become None, not an empty filter matching nothing."""
+    seen: dict[str, object] = {}
+
+    def spy(topic: str, n_results: int = 5, vaults: list[str] | None = None) -> list[RetrievedChunk]:
+        seen["vaults"] = vaults
+        return [make_chunk()]
+
+    monkeypatch.setattr(ask_module, "retrieve", spy)
+
+    runner.invoke(app, ["ask", "redis"], input="\n")
+
+    assert seen["vaults"] is None

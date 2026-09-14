@@ -9,3 +9,4 @@ class RetrievedChunk:
     heading: str
     content: str
     distance: float
+    vault: str = ""

@@ -4,7 +4,7 @@ import hashlib
 from typing import Any, cast
 import chromadb
 from chromadb.api import ClientAPI
-from chromadb.api.types import PyEmbedding
+from chromadb.api.types import PyEmbedding, Where
 from chromadb.api.models.Collection import Collection
 from socratese.chunking.models import Chunk
 
@@ -22,7 +22,18 @@ def chunk_id(chunk: Chunk) -> str:
     key = f"{chunk.note_path}::{chunk.heading}"
     return hashlib.sha256(key.encode()).hexdigest()
 
-def add_chunks(chunks: list[Chunk], embeddings: list[list[float]], collection: Collection | None = None) -> None:
+def add_chunks(
+    chunks: list[Chunk],
+    embeddings: list[list[float]],
+    vault: str,
+    collection: Collection | None = None,
+) -> None:
+    """Store chunks, tagged with the vault they came from.
+
+    `vault` is a parameter rather than a field on Chunk: which vault a note
+    lives in is a storage concern, not part of the note's content, and the
+    chunker has no idea about vaults.
+    """
     if not chunks:
         return
 
@@ -34,14 +45,31 @@ def add_chunks(chunks: list[Chunk], embeddings: list[list[float]], collection: C
         embeddings=cast(list[PyEmbedding], embeddings),
         documents=[c.content for c in chunks],
         metadatas=[
-            {"note_path": str(c.note_path), "note_title": c.note_title, "heading": c.heading}
+            {
+                "note_path": str(c.note_path),
+                "note_title": c.note_title,
+                "heading": c.heading,
+                "vault": vault,
+            }
             for c in chunks
         ],
     )
 
-def query(embedding: list[float], n_results: int = 5, collection: Collection | None = None) -> list[dict[str, Any]]:
+def query(
+    embedding: list[float],
+    n_results: int = 5,
+    vaults: list[str] | None = None,
+    collection: Collection | None = None,
+) -> list[dict[str, Any]]:
+    """Nearest chunks to `embedding`, optionally restricted to named vaults.
+
+    Filtering happens inside Chroma rather than after the fact, so asking for
+    five results from one vault returns five, not however many of a global five
+    happened to come from it.
+    """
     collection = collection or get_collection()
-    result = collection.query(query_embeddings=[embedding], n_results=n_results)
+    where: Where | None = {"vault": {"$in": list(vaults)}} if vaults else None
+    result = collection.query(query_embeddings=[embedding], n_results=n_results, where=where)
 
     # Chroma types these as Optional because `include` can omit them; all three
     # are in the default include, so they are always present here.

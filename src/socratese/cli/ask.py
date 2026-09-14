@@ -84,18 +84,29 @@ def _converse(session: Session, history: SessionRecorder, question: str) -> bool
 def ask(
     topic: str = typer.Argument(..., help="What you want to be questioned about"),
     n_chunks: int = typer.Option(5, "--chunks", "-n", help="how many notes to draw on"),
+    vaults: list[str] = typer.Option(
+        [], "--vault", "-v", help="Limit to these vaults. Repeatable; default is all."
+    ),
     sources: bool = typer.Option(
         False, "--sources", "-s", help="Reveal which notes the questions come from"
     ),
 ) -> None:
     """Be questioned Socratically about your own notes."""
-    if not any(v.last_indexed for v in load_vaults()):
+    indexed = [v for v in load_vaults() if v.last_indexed]
+    if not indexed:
         console.print("No vault has been indexed yet. Run [bold]socratese index <vault>[/bold] first.")
+        raise typer.Exit(code=1)
+
+    known = {v.name for v in indexed}
+    unknown = [name for name in vaults if name not in known]
+    if unknown:
+        console.print(f"[red]Error:[/red] No indexed vault named {', '.join(unknown)}.")
+        console.print(f"Indexed vaults: {', '.join(sorted(known))}")
         raise typer.Exit(code=1)
 
     try:
         with console.status("Searching your notes..."):
-            chunks = retrieve(topic, n_results=n_chunks)
+            chunks = retrieve(topic, n_results=n_chunks, vaults=vaults or None)
     except openai.APIError as e:
         console.print(f"[red]Error:[/red] Could not embed your question: {e}")
         raise typer.Exit(code=1)
