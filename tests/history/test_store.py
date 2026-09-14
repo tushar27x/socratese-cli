@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from anthropic.types import MessageParam
 
 from socratese.history.models import SessionRecord
 from socratese.history.store import (
@@ -15,6 +16,7 @@ from socratese.history.store import (
     recent_sessions,
     record_answer,
     record_question,
+    save_messages,
     start_session,
 )
 from socratese.retrieval.models import RetrievedChunk
@@ -279,3 +281,75 @@ def test_answered_turns_ignores_unanswered_ones(conn: sqlite3.Connection):
     assert isinstance(record, SessionRecord)
     assert len(record.turns) == 2
     assert record.answered_turns == 1
+
+
+# --- raw messages -------------------------------------------------------------
+
+
+def test_raw_messages_round_trip(conn: sqlite3.Connection):
+    session_id = start_session(conn, "topic", "model", [make_chunk()])
+    messages: list[MessageParam] = [
+        {"role": "user", "content": "excerpts and topic"},
+        {"role": "assistant", "content": "Q1?"},
+    ]
+
+    save_messages(conn, session_id, messages)
+
+    record = load_session(conn, session_id)
+    assert record is not None
+    assert record.messages == messages
+    assert record.is_resumable
+
+
+def test_saving_messages_overwrites_rather_than_appends(conn: sqlite3.Connection):
+    """Each turn snapshots the whole conversation, so the column must hold the
+    latest state, not an accumulation of every snapshot taken."""
+    session_id = start_session(conn, "topic", "model", [make_chunk()])
+    save_messages(conn, session_id, [{"role": "user", "content": "first"}])
+
+    save_messages(conn, session_id, [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "second"},
+    ])
+
+    record = load_session(conn, session_id)
+    assert record is not None
+    assert len(record.messages) == 2
+
+
+def test_a_session_without_raw_messages_is_not_resumable(conn: sqlite3.Connection):
+    """Sessions recorded before raw messages were stored still list and review,
+    they just cannot be replayed."""
+    session_id = start_session(conn, "topic", "model", [make_chunk()])
+
+    record = load_session(conn, session_id)
+
+    assert record is not None
+    assert record.messages == []
+    assert not record.is_resumable
+
+
+def test_an_existing_database_gains_the_messages_column(tmp_path: Path):
+    """A database created before this column existed must not need deleting.
+    CREATE TABLE IF NOT EXISTS is a no-op on an existing table, so the column
+    is added by an explicit migration."""
+    path = tmp_path / "sessions.db"
+    legacy = sqlite3.connect(path)
+    legacy.executescript(
+        "CREATE TABLE sessions (id INTEGER PRIMARY KEY, topic TEXT NOT NULL,"
+        " model TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT);"
+    )
+    legacy.execute(
+        "INSERT INTO sessions (topic, model, started_at) VALUES ('old', 'm', '2026-01-01T00:00:00+00:00')"
+    )
+    legacy.commit()
+    legacy.close()
+
+    conn = connect(path)
+
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)")}
+    assert "messages" in columns
+    survivor = recent_sessions(conn)[0]
+    assert survivor.topic == "old"  # migration preserved the existing row
+    assert not survivor.is_resumable
+    conn.close()

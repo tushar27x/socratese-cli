@@ -54,7 +54,7 @@ def ask(
             console.print(f"[red]Error:[/red] The question request failed: {e}")
             raise typer.Exit(code=1)
 
-        history.question(question)
+        history.question(question, session.messages)
         console.print("\n[dim]Answer in your own words. Blank line to end.[/dim]")
 
         while True:
@@ -70,7 +70,7 @@ def ask(
             if not reply:
                 break
 
-            history.answer(reply)
+            history.answer(reply, session.messages)
 
             try:
                 with console.status("Thinking..."):
@@ -79,7 +79,7 @@ def ask(
                 console.print(f"[red]Error:[/red] The question request failed: {e}")
                 break
 
-            history.question(question)
+            history.question(question, session.messages)
 
     console.print("\n[dim]Session ended.[/dim]")
 

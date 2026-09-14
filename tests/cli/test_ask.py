@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from anthropic.types import MessageParam
 from typer.testing import CliRunner
 
 from socratese import config
@@ -27,11 +28,16 @@ def make_chunk(distance: float = 0.7) -> RetrievedChunk:
 
 
 class FakeSession:
-    """Stands in for dialogue.Session — no API calls, scripted questions."""
+    """Stands in for dialogue.Session — no API calls, scripted questions.
+
+    Maintains a real `messages` list because the CLI snapshots it into history;
+    a fake without one would pass the old tests and break the new behaviour.
+    """
 
     def __init__(self, topic: str, chunks: list[RetrievedChunk], client: object = None) -> None:
         self.topic = topic
         self.chunks = [c for c in chunks if c.distance <= 1.2]
+        self.messages: list[MessageParam] = []
         self.replies: list[str] = []
 
     @property
@@ -39,11 +45,16 @@ class FakeSession:
         return bool(self.chunks)
 
     def opening_question(self) -> str:
+        self.messages.append({"role": "user", "content": "<excerpts>"})
+        self.messages.append({"role": "assistant", "content": "Q1?"})
         return "Q1?"
 
     def answer(self, response: str) -> str:
         self.replies.append(response)
-        return f"Q{len(self.replies) + 1}?"
+        question = f"Q{len(self.replies) + 1}?"
+        self.messages.append({"role": "user", "content": response})
+        self.messages.append({"role": "assistant", "content": question})
+        return question
 
 
 @pytest.fixture
@@ -136,3 +147,16 @@ def test_a_broken_history_database_does_not_stop_the_session(
     assert result.exit_code == 0
     assert "Q1?" in result.output
     assert "Q2?" in result.output
+
+
+def test_the_raw_conversation_is_stored_for_replay(wired: Path):
+    """Turns are the queryable view; raw messages are what resume replays."""
+    runner.invoke(app, ["ask", "redis"], input="my answer\n\n")
+
+    conn = connect(wired)
+    record = load_session(conn, recent_sessions(conn)[0].id)
+    assert record is not None
+    assert record.is_resumable
+    assert [m["role"] for m in record.messages] == ["user", "assistant", "user", "assistant"]
+    assert record.messages[2]["content"] == "my answer"
+    conn.close()

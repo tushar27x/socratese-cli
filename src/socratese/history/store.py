@@ -8,11 +8,14 @@ share a store that a re-index could wipe.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 import platformdirs
+
+from anthropic.types import MessageParam
 
 from socratese.history.models import SessionRecord, Turn
 from socratese.retrieval.models import RetrievedChunk
@@ -29,7 +32,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     topic      TEXT NOT NULL,
     model      TEXT NOT NULL,
     started_at TEXT NOT NULL,
-    ended_at   TEXT
+    ended_at   TEXT,
+    messages   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS turns (
@@ -58,6 +62,18 @@ def get_db_path() -> Path:
     return Path(platformdirs.user_data_dir(APP_NAME)) / "sessions.db"
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring an existing database up to the current schema.
+
+    CREATE TABLE IF NOT EXISTS is a no-op on a table that already exists, so
+    columns added after a database was first created need adding explicitly.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(sessions)")}
+    if "messages" not in columns:
+        conn.execute("ALTER TABLE sessions ADD COLUMN messages TEXT")
+        conn.commit()
+
+
 def connect(path: Path | None = None) -> sqlite3.Connection:
     """Open the history database, creating it and its schema if needed."""
     path = path or get_db_path()
@@ -68,6 +84,7 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     # off by default in sqlite3; without it the CASCADE deletes above are inert
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
 
 
@@ -137,6 +154,22 @@ def record_answer(conn: sqlite3.Connection, session_id: int, ordinal: int, answe
     conn.commit()
 
 
+def save_messages(
+    conn: sqlite3.Connection, session_id: int, messages: list[MessageParam]
+) -> None:
+    """Snapshot the raw conversation as sent to the API.
+
+    Stored verbatim so a resumed session continues from exactly what the model
+    saw, rather than a transcript re-rendered with today's prompt formatting.
+    The `turns` table stays the queryable view; this is the replayable one.
+    """
+    conn.execute(
+        "UPDATE sessions SET messages = ? WHERE id = ?",
+        (json.dumps(messages), session_id),
+    )
+    conn.commit()
+
+
 def end_session(conn: sqlite3.Connection, session_id: int) -> None:
     conn.execute(
         "UPDATE sessions SET ended_at = ? WHERE id = ?",
@@ -152,6 +185,7 @@ def _row_to_record(row: sqlite3.Row) -> SessionRecord:
         model=row["model"],
         started_at=datetime.fromisoformat(row["started_at"]),
         ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
+        messages=json.loads(row["messages"]) if row["messages"] else [],
     )
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from anthropic.types import MessageParam
+
 from socratese.retrieval.models import RetrievedChunk
 
 
@@ -30,8 +32,16 @@ class SessionRecord:
     model: str
     started_at: datetime
     ended_at: datetime | None = None
+    #: The conversation exactly as sent to the API, for replay. Empty for
+    #: sessions recorded before raw messages were stored.
+    messages: list[MessageParam] = field(default_factory=list[MessageParam])
     turns: list[Turn] = field(default_factory=list[Turn])
     chunks: list[RetrievedChunk] = field(default_factory=list[RetrievedChunk])
+
+    @property
+    def is_resumable(self) -> bool:
+        """Older sessions have turns but no raw messages, so cannot be replayed."""
+        return bool(self.messages)
 
     @property
     def answered_turns(self) -> int:

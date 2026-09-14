@@ -7,14 +7,17 @@ to interrupting the conversation.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
+
+from anthropic.types import MessageParam
 
 from socratese.history.store import (
     connect,
     end_session,
     record_answer,
     record_question,
+    save_messages,
     start_session,
 )
 from socratese.retrieval.models import RetrievedChunk
@@ -36,20 +39,29 @@ class SessionRecorder:
     def enabled(self) -> bool:
         return self._conn is not None and self.session_id is not None
 
-    def question(self, text: str) -> None:
+    def question(self, text: str, messages: list[MessageParam] | None = None) -> None:
         self._ordinal += 1
-        if self._conn is None or self.session_id is None:
-            return
-        try:
-            record_question(self._conn, self.session_id, self._ordinal, text)
-        except sqlite3.Error:
-            self._conn = None
+        self._write(lambda conn, sid: record_question(conn, sid, self._ordinal, text), messages)
 
-    def answer(self, text: str) -> None:
+    def answer(self, text: str, messages: list[MessageParam] | None = None) -> None:
+        self._write(lambda conn, sid: record_answer(conn, sid, self._ordinal, text), messages)
+
+    def _write(
+        self,
+        operation: Callable[[sqlite3.Connection, int], None],
+        messages: list[MessageParam] | None,
+    ) -> None:
+        """Apply one write plus an optional message snapshot, or disable on error.
+
+        `messages` is passed in rather than read off a Session so this module
+        stays independent of the dialogue layer.
+        """
         if self._conn is None or self.session_id is None:
             return
         try:
-            record_answer(self._conn, self.session_id, self._ordinal, text)
+            operation(self._conn, self.session_id)
+            if messages is not None:
+                save_messages(self._conn, self.session_id, messages)
         except sqlite3.Error:
             self._conn = None
 
