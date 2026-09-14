@@ -17,7 +17,7 @@ import anthropic
 import openai
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Input, ProgressBar, Static
 
 from socratese import tutor
@@ -69,8 +69,21 @@ class SocrateseApp(App[None]):
     #entry:focus {
         border: round ansi_bright_blue;
     }
-    #progress {
+    /* One docked container, so the bar and the input share an allocation
+       instead of competing for the bottom rows. Docking both separately put
+       the bar on the input's border row, where it was drawn underneath. */
+    #bottom {
         dock: bottom;
+        height: 3;
+        background: transparent;
+    }
+    /* Explicit heights, not `auto`: with the bar hidden, auto collapsed the
+       container to zero and the input floated over the log, letting the
+       transcript scroll underneath it. */
+    #bottom.indexing {
+        height: 4;
+    }
+    #progress {
         height: 1;
         padding: 0 2;
         background: transparent;
@@ -107,12 +120,13 @@ class SocrateseApp(App[None]):
         # wide and cut off behind a horizontal scrollbar. Static re-wraps
         # itself whenever its width changes.
         yield VerticalScroll(id="log")
-        yield ProgressBar(id="progress", show_eta=False)
-        yield Input(
-            placeholder="Type an answer, or /help",
-            id="entry",
-            suggester=SlashCommandSuggester(),
-        )
+        with Vertical(id="bottom"):
+            yield ProgressBar(id="progress", show_eta=False)
+            yield Input(
+                placeholder="Type an answer, or /help",
+                id="entry",
+                suggester=SlashCommandSuggester(),
+            )
 
     def on_mount(self) -> None:
         self.title = "socratese"
@@ -263,6 +277,7 @@ class SocrateseApp(App[None]):
         bar = self.query_one("#progress", ProgressBar)
         bar.update(total=total or None, progress=0)
         bar.add_class("running")
+        self.query_one("#bottom").add_class("indexing")
         self.say(f"[dim]{label}[/dim]")
 
     def progress_to(self, done: int, total: int) -> None:
@@ -270,6 +285,7 @@ class SocrateseApp(App[None]):
 
     def progress_done(self) -> None:
         self.query_one("#progress", ProgressBar).remove_class("running")
+        self.query_one("#bottom").remove_class("indexing")
 
     # --- views ----------------------------------------------------------
 

@@ -420,22 +420,51 @@ async def test_text_rewraps_when_the_terminal_narrows(wired: Path):
         assert widget.size.width <= 70
 
 
-async def test_the_bar_is_visible_while_indexing_runs(wired: Path):
-    """Tested directly: the bar's whole job is to be on screen during the wait,
-    and asserting only the before/after states misses it never appearing."""
+async def test_the_bar_occupies_real_screen_space_while_indexing(wired: Path):
+    """Asserting only the CSS class passed while the bar was drawn on the
+    input's border row, invisible. Geometry is what actually matters."""
     app = SocrateseApp()
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(120, 20)) as pilot:
+        await pilot.pause()
         bar = app.query_one("#progress", ProgressBar)
+        entry = app.query_one("#entry")
+
+        assert bar.region.height == 0  # nothing before indexing starts
+        # the container docks to the bottom and grows upward, so the input
+        # never moves; the transcript is what gives up a row
+        log_height = app.query_one("#log").region.height
 
         app.progress_start("Embedding — work", 400)
         await pilot.pause()
-        assert bar.has_class("running")
+
+        assert bar.region.height == 1
+        assert app.query_one("#log").region.height == log_height - 1
+        assert bar.region.y < entry.region.y  # above the input, not on top of it
+        assert bar.region.y + bar.region.height <= 20
 
         app.progress_to(200, 400)
         await pilot.pause()
-        assert bar.progress == 200
-        assert bar.total == 400
+        assert (bar.progress, bar.total) == (200, 400)
 
         app.progress_done()
         await pilot.pause()
-        assert not bar.has_class("running")
+        assert bar.region.height == 0
+        # the container has to shrink back too, or a blank row is left above
+        # the input for the rest of the session
+        assert app.query_one("#log").region.height == log_height
+
+
+async def test_the_transcript_never_scrolls_under_the_input(wired: Path):
+    """`height: auto` on the bottom container collapsed it to zero, leaving the
+    input floating over the log."""
+    app = SocrateseApp()
+    async with app.run_test(size=(120, 20)) as pilot:
+        await pilot.pause()
+        log = app.query_one("#log")
+        bottom = app.query_one("#bottom")
+
+        assert log.region.y + log.region.height <= bottom.region.y
+
+        app.progress_start("Embedding — work", 400)
+        await pilot.pause()
+        assert log.region.y + log.region.height <= bottom.region.y
