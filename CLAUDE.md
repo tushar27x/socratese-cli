@@ -391,6 +391,41 @@ last_indexed = "2026-09-01T10:00:00Z"
   `list[PyEmbedding]`, and Chroma types query-result fields `Optional` because
   `include` can omit them (all three are in the default include).
 
+### Prompt rules stop at 9 — a tenth was tried twice and rejected
+- `scripts/eval_dialogue.py` drives scripted conversations through `Session`
+  (a wrong answer, a surrender, a string of vague ones) so rules can be judged
+  without typing by hand. Not a test and never under `tests/`: it costs money,
+  hits the network, and has no assertions.
+- **Measured result, first attempt.** Follow-ups were opening with a reflection
+  ("You said X, but...", "I hear you mention X, but let me ask more
+  specifically"). A rule 10 forbidding preamble in follow-ups had *no effect* —
+  the phrasing persisted verbatim.
+- **Measured result, second attempt.** Re-reading the transcripts, the real
+  defect was narrower: the model sometimes recited the excerpts back ("Your
+  notes say Q represents the previous state of the decoder"), which does the
+  recall work the question exists to force. A rule 10 targeting reciting rather
+  than preamble made things *worse*: the opening question started reciting when
+  it previously had not, and turns 2-4 all re-asked the same thing, breaking
+  rule 9. Four turns of no progress against four turns of real progress.
+- **Conclusion: reverted to 9 rules.** Two lessons worth keeping. Reflecting
+  the user's own answer back is not the same failure as reciting their notes,
+  and is probably fine. And prompt dilution is real at this model size — adding
+  a tenth rule measurably degraded adherence to an existing one, so new rules
+  have to earn their place against the rules they weaken.
+- **Rule 7 verified.** A scripted answer describing AOF behaviour as RDB drew
+  "Look back at your notes about what the parent process does while the child
+  is writing the RDB file" — a question pointing at the contradicting passage,
+  not a correction. This was the last untested rule.
+
+### `ask_questions()` collapsed into `Session`
+- The single-shot function lost its last caller when `ask` went multi-turn.
+  Removed rather than left as dead-but-tested code.
+- Its unique coverage was ported into `test_socratic.py` first (system prompt
+  not duplicated into the user turn, `max_tokens` headroom, multiple text
+  blocks joined in order, `get_client` behaviour), and `test_session.py` was
+  merged into `test_socratic.py` so tests mirror source structure one-to-one
+  again.
+
 ---
 
 ## 6. When in doubt
