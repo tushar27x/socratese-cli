@@ -1,6 +1,6 @@
 # Socratese — Progress
 
-Last updated: 2026-09-12
+Last updated: 2026-09-14
 
 Status/continuity doc for picking this project back up in a new session.
 For *why* decisions were made, see `CLAUDE.md` section 5 (the living
@@ -216,12 +216,71 @@ across two retrieved chunks — the rule may be wrong, not the model.
 **Prompt not yet tuned on this; sample size is one, and it is an Opus
 sample, not a Haiku one.**
 
-Tests: 94 passing, mirroring source structure under `tests/` —
+**Phase 5 (partial): `ask` command and multi-turn dialogue — built, tested,
+and used against the real vault.**
+
+- `src/socratese/cli/ask.py` — `socratese ask "<topic>"`, wired flat in
+  `cli/main.py` alongside `index`. Retrieves, opens a `Session`, then loops on
+  `console.input()` until a blank line or Ctrl-D. `--sources` / `-s` reveals
+  which notes grounded the conversation, `--chunks` / `-n` sets how many to
+  retrieve.
+- `--sources` is **off by default and prints only at the end**. Naming the
+  source note mid-conversation tells you where to look, which short-circuits
+  exactly the recall the tool exists to force.
+- `Session` in `dialogue/socratic.py` — holds the filtered chunks, the growing
+  `messages` list, and a lazily-built client. `opening_question()` seeds the
+  history with the excerpts; `answer(reply)` appends the reply and returns the
+  follow-up. `has_grounding` replaces the old `None` return as the no-match
+  gate, and works with no API key set. See the decisions log for why the
+  chunks are filtered once and why the assistant's turns are recorded.
+- `SYSTEM_PROMPT` gained rules 6-9 for the conversation half: never confirm or
+  deny, never correct a contradiction directly, never answer even on "I don't
+  know", never repeat a question.
+- `ask_questions()` (single-shot) still exists and is still tested, but now has
+  **no callers**. It is the obvious thing to collapse into `Session` next.
+
+Three bugs found in review of the first multi-turn draft, all worth knowing:
+1. The CLI still called `ask_questions()` for the opening question, so
+   `session.messages` was empty when the loop started — every turn after the
+   first was ungrounded, with no excerpts and no memory of the question just
+   asked. It *looked* fine because turn 1 was correct.
+2. `Session.__init__` assigned `self.chunks = chunks` without filtering, which
+   silently killed the relevance gate — `has_grounding` became "did retrieval
+   return anything," which is always true.
+3. `get_client()` ran during `Session` construction, outside any `try`, so a
+   missing `ANTHROPIC_API_KEY` produced a raw traceback. Fixed by making the
+   client lazy, which also means the no-match path needs no credentials.
+
+**Prompt verified against the real vault, multi-turn.** Topic: "what is
+attention mechnaism?" (typo preserved — retrieval handled it). Four turns
+against the `Transformer Architecture` notes, with partial answers and then an
+explicit "no idea":
+
+> **>** no idea
+>
+> *"Look at your notes again — you mention that 'A high score means that the
+> model will use more of the value vector.' If the model is going to use more
+> of some values and less of others, what needs to happen to those scores
+> first so they can be used as weights?"*
+
+Rule 8 held: the surrender produced a smaller question pointing back at the
+user's own note, not the answer. **The word "softmax" was never said across
+four turns.** Rule 6 held (no confirmation, even on a correct partial answer);
+rule 9 held (four distinct questions, progressively narrowing, none a
+rephrase). This was the specific failure predicted when choosing Haiku over
+Opus, and it did not happen.
+
+**Still untested: rule 7** — what happens when an answer *contradicts* the
+excerpts. Partial answers and surrender are covered; a confidently wrong
+answer is not.
+
+Tests: 112 passing, mirroring source structure under `tests/` —
 `vault/test_models.py`, `test_config.py`, `vault/test_discovery.py`,
 `cli/test_vault.py`, `cli/test_index.py`, `ingest/test_parser.py`,
 `chunking/test_chunker.py`, `embedding/test_embedder.py`,
 `vectorstore/test_store.py`, `retrieval/test_retriever.py`,
-`dialogue/test_prompt.py`, `dialogue/test_socratic.py`.
+`dialogue/test_prompt.py`, `dialogue/test_socratic.py`,
+`dialogue/test_session.py`.
 Config/vault tests use `monkeypatch` on `config.get_config_path` to avoid
 touching the real `~/.config/socratese/config.toml`. CLI tests use
 `typer.testing.CliRunner`. Ingest/chunking tests use pytest's `tmp_path`
@@ -288,6 +347,29 @@ always rendered, excerpts joined with a single newline), each breaking
 exactly one test. One-failure-each is the signal worth having: no test is
 redundant, none so broad it catches everything.
 
+`dialogue/test_session.py` (18 tests) drives `Session` through a fake client
+that **snapshots** each call's message list rather than storing the reference
+— the session passes `self.messages` by value-of-reference and keeps mutating
+it, so an aliasing fake makes every turn look identical. (Found by a test
+failing for the wrong reason; a real SDK serialises immediately, so this is a
+test artefact, not a source bug.) The load-bearing cases: chunks filtered once
+at construction and dropped ones never reaching the prompt; the assistant's
+question recorded as an assistant turn (remove it and 4 tests fail); each turn
+resending the *whole* history, not just the latest reply; the grounding
+appearing exactly once across the conversation; and `has_grounding` answering
+with `ANTHROPIC_API_KEY` deleted, which pins the lazy client.
+
+All nine mutations to `Session` break tests — dropping the threshold filter,
+flipping `<=` to `<`, not recording assistant turns, sending only the latest
+message, dropping the system prompt, hardcoding the model, removing the
+`.type` filter, making the client eager, and re-sending the grounding on every turn.
+
+**Type checking:** `npx pyright` from the repo root. Config is pinned in
+`pyproject.toml` under `[tool.pyright]` (strict). `src/` and `tests/` are both
+clean; see the decisions log for the two necessary casts and the one
+suppression. Pyright is not a Python dependency — it runs via node/npx, so it
+is deliberately absent from `pyproject.toml`'s `[dev]` extra.
+
 Run `pytest -v` from repo root to confirm (needs `pip install -e ".[dev]"`
 in the venv once, for `pytest` itself).
 
@@ -318,60 +400,54 @@ and asserts when run from stdin.
   now (setup + `vault add` → `index`, i.e. what actually works today),
   or wait until `ask` exists so it can document a real end-to-end flow
   instead of being rewritten at Phase 4.
-- **No `ask`/`review` command and no Textual app.** `ask_questions()` works
-  and is tested, but nothing in the CLI calls it — the only way to run the
-  dialogue layer today is by hand in a REPL. `retrieve()` and
-  `ask_questions()` are both ready for it.
-- **`ask_questions()` returns a bare `str` for the no-match case.** "No
-  relevant notes found." has the same type as a real question, so a caller
-  cannot branch on it without string-matching, and a UI would render it in
-  the question pane as though the tutor asked it. Should become
-  `Question | None` (or at minimum `str | None`) when the provider refactor
-  lands — the return type is changing anyway at that point.
-- **No error handling around the dialogue API call.** A failure surfaces as
-  a raw traceback with the useful sentence buried under ~25 lines of SDK
-  internals (confirmed by hitting a real 400 for an empty credit balance).
-  The library raising is correct — `index.py` set the precedent that the
-  *CLI* catches and renders. So this fix belongs in the `ask` command that
-  doesn't exist yet: catch `anthropic.APIError`, with
-  `AuthenticationError` (bad key) and `BadRequestError` (billing) deserving
-  better messages than the SDK's.
+- **No Textual app.** `ask` is a plain `console.input()` REPL loop. The
+  decisions log still commits to Textual for the polished UX; `Session`
+  holding the state is what makes that a UI change rather than an
+  architecture change. No `review` command either.
+- **No completion state in a session.** Prompt rule 6 means the tutor never
+  says "you've got it," so a conversation funnels forever and the only exit
+  is a blank line. Open question, not a task: rule 6 is doing real work and
+  should not be relaxed to fix this. More likely an end-of-session
+  affordance — on exit, print which notes you struggled with so you know
+  what to go re-read. `--sources` is already half of that.
+- **`ask_questions()` has no callers.** `Session` subsumed it. It is still
+  tested and works, kept as a fallback while the session proves out; the
+  obvious next cleanup is collapsing it into `Session`.
 - **Provider fallback designed but not built** — see the decisions log for
   the adapter shape and why it was deferred rather than built when the
-  Anthropic balance ran out.
-- **Prompt is untuned.** One Opus sample and a handful of Haiku runs is not
-  an evaluation. The two known rule violations (preamble, compound question)
-  are recorded above but not acted on, deliberately — changing
-  `SYSTEM_PROMPT` off a sample size of one would be guessing.
+  Anthropic balance ran out. Note it would change `Session`'s constructor
+  and return types, rewriting much of `dialogue/test_session.py`.
+- **Prompt is untuned, and rule 7 is untested.** Multi-turn behaviour is now
+  verified for partial answers and for "I don't know" (see above), but not
+  for a confidently *wrong* answer that contradicts the excerpts. No
+  systematic sweep has been run at all.
 - `scripts/eval_dialogue.py` doesn't exist yet (see above).
 
 ## Next step
 
-1. **Save `scripts/eval_dialogue.py` and actually evaluate the prompt.**
-   Cheapest next thing and a prerequisite for everything else — every
-   later judgment about prompt or model quality is guesswork without a
-   repeatable sweep. Run 5-6 topics, deliberately including areas where
-   the notes are thin (that's where rule 3, "stay inside the excerpts,"
-   should crack first on Haiku). Only then decide whether to relax rule 1
-   to bless the compound question, and whether to forbid the preamble
-   more explicitly.
-2. **`ask` as a one-shot Typer command before the Textual app.** The
-   decisions log commits to Textual for multi-turn dialogue, and that
-   still holds — but `ask_questions()` is currently single-turn, so a
-   one-shot `socratese ask "<topic>"` is the honest surface for what
-   exists, and it's where the error handling listed above belongs. Multi-
-   turn conversation state is a separate design problem; building the
-   Textual app first would mean designing a UI for a conversation the
-   dialogue layer can't yet hold.
-3. **Provider fallback** (`dialogue/providers.py`) when it's actually
-   wanted — shape is already decided, see the decisions log. Note this
-   changes `ask_questions()`'s signature and return type, which will
-   rewrite all 17 tests in `dialogue/test_socratic.py`. Worth doing
-   together with the `Question | None` fix rather than twice.
-4. Consider whether `.trash` history is worth also purging from the
-   vault config over time, or whether excluding it at parse-time is
-   sufficient forever — not urgent, just noting it as a possible
-   future edge case (e.g. if the vault grows a very large `.trash/`).
+1. **Save `scripts/eval_dialogue.py` and run a real evaluation.** Now the
+   cheapest *and* most overdue thing: `ask` exists, so the sweep is just the
+   command in a loop. Priorities, in order: rule 7 (answer something that
+   contradicts your notes — does it correct you, or send you back to the
+   passage?), then thin-notes topics where rule 3 should crack first, then
+   longer sessions to see whether question quality degrades past turn 4.
+   Belongs in `scripts/`, never `tests/` — it costs money, hits the network,
+   and needs a human to judge the output, so letting `pytest` collect it
+   would make the suite bill you.
+2. **Collapse `ask_questions()` into `Session`.** It has no callers. Doing it
+   before the provider fallback avoids changing the same signatures twice.
+3. **Textual app for `ask`** — a UI change now, not an architecture one.
+   Scrollback, a fixed input pane, and somewhere to surface `--sources`
+   without it interrupting the conversation.
+4. **README.md.** The original reason to wait was "until `ask` exists so it
+   can document a real end-to-end flow." That condition is now met, and the
+   repo still has no front door. The architecture diagram drafted as an
+   artifact is meant to seed its architecture section.
+5. **Provider fallback** (`dialogue/providers.py`) when actually wanted —
+   shape already decided, see the decisions log.
+6. Consider whether `.trash` history is worth also purging from the vault
+   config over time, or whether excluding it at parse-time is sufficient
+   forever — not urgent, just a possible future edge case.
 
 ## Environment notes
 

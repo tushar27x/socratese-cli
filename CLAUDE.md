@@ -333,6 +333,64 @@ last_indexed = "2026-09-01T10:00:00Z"
   accident rather than by choice, which is a decision to make, not to
   inherit from an error path.
 
+### Multi-turn dialogue: `Session` holds the conversation, the CLI drives it
+- `Session` in `dialogue/socratic.py` (not a new module — a session *is*
+  dialogue generation, and this avoids moving it later when the single-shot
+  `ask_questions()` gets collapsed into it).
+- It owns the three things that change together: the filtered chunks, the
+  growing `messages` list, and the client. The rest of this codebase is plain
+  functions because none of it had state; a conversation does.
+- **Chunks are retrieved and filtered once, at construction.** Re-retrieving
+  per turn would let the grounding drift toward whatever the last answer
+  happened to mention, and re-appending the excerpts each turn would bloat the
+  history and pull the model onto the newest copy.
+- **The model's own questions are appended as assistant turns.** Without that
+  it cannot see what it already asked, and prompt rule 9 ("never repeat a
+  question") has nothing to work from.
+- **The client is lazy** (`@property` over `self._client`), so `has_grounding`
+  answers "your notes have nothing on this" with no API key set. Being told
+  your vault is empty on a topic should not require credentials — and it makes
+  `Session` constructible in tests without touching the environment.
+- CLI loop lives in `cli/ask.py`: a plain `console.input()` REPL, not Textual
+  yet. Deliberate pacing — the decisions log still commits to Textual for the
+  polished UX, but putting the state in `Session` makes that a UI change rather
+  than an architecture change. A mid-loop API error `break`s instead of exiting,
+  so a failed turn still ends the session cleanly with `--sources` intact.
+- `--sources` prints **after** the session, not alongside each question.
+  Revealing mid-conversation tells you where to look and short-circuits the
+  recall the tool exists to force; revealing at the end tells you what to go
+  re-read.
+
+### Prompt rules 6-9: never confirm, never answer, never repeat
+- Rules 1-5 govern a single question; 6-9 govern what happens after an answer.
+- **Rule 6 ("never confirm or deny") is the load-bearing one and the most
+  debatable.** Withholding "yes, that's right" would be unhelpful in most
+  tutors; in a Socratic one it is the whole method, because confirmation ends
+  the deriving. Accepted knowingly, with the consequence noted under open
+  questions below.
+- **Rule 8 ("if they say they don't know, still don't answer") verified against
+  the real vault.** See PROGRESS.md for the transcript: an explicit "no idea"
+  produced a smaller question pointing back at the user's own note, not the
+  answer. This was the specific failure predicted for a smaller model, and it
+  held.
+
+### Type checking: pyright strict, pinned in `pyproject.toml`
+- Editor-local strictness meant a reviewer cloning the repo saw different
+  diagnostics than the author. Now `[tool.pyright]` with
+  `typeCheckingMode = "strict"` is checked in, so the repo is the authority.
+- Strict was initially going to be lowered to `standard` (500 errors), but the
+  errors turned out to trace to a handful of real root causes — unannotated
+  injection seams (`collection=None`, `client=None`), bare `dict` generics on
+  the dataclasses, and `chromadb.ClientAPI` not being re-exported, which had
+  silently made **every type in `store.py` `Unknown` and therefore unchecked**.
+  Fixing those reached zero. "Strict and clean" beats "we turned the bar down."
+- One suppression: `reportMissingTypeStubs = false`, because chromadb ships no
+  stubs. Its runtime types are still inferred and checked.
+- Two casts that are necessary rather than workarounds, both commented in
+  `store.py`: `list` invariance means `list[list[float]]` is not a
+  `list[PyEmbedding]`, and Chroma types query-result fields `Optional` because
+  `include` can omit them (all three are in the default include).
+
 ---
 
 ## 6. When in doubt
