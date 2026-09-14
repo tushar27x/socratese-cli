@@ -79,7 +79,11 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     path = path or get_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(path)
+    # check_same_thread=False because the TUI opens a session on a worker
+    # thread and closes it on the event loop. Safe here: sqlite3.threadsafety
+    # is 3 (serialized), and a session is driven by one user, one turn at a
+    # time, so the connection is never used concurrently.
+    conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     # off by default in sqlite3; without it the CASCADE deletes above are inert
     conn.execute("PRAGMA foreign_keys = ON")
