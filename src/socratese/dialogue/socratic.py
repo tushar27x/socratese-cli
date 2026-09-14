@@ -69,12 +69,12 @@ class Session:
 
         return self._next_turn()
 
-    def answer(self, response:str) -> str:
+    def answer(self, response: str) -> str:
         """Submit the user's answer, get the follow-up question."""
         self.messages.append({"role": "user", "content": response})
         return self._next_turn()
 
-    
+
     def _next_turn(self) -> str:
         res = self.client.messages.create(
             model=os.environ.get("DIALOGUE_MODEL", DEFAULT_MODEL),
@@ -86,4 +86,3 @@ class Session:
         text: str = "".join(b.text for b in res.content if b.type == "text").strip()
         self.messages.append({"role": "assistant", "content": text})
         return text
-    

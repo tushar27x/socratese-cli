@@ -31,13 +31,13 @@ def ask(
     except openai.APIError as e:
         console.print(f"[red]Error:[/red] Could not embed your question: {e}")
         raise typer.Exit(code=1)
-    
-    session = Session(topic, chunks)        
+
+    session = Session(topic, chunks)
     if not session.has_grounding:
         console.print(f"[yellow]Your notes have nothing on '{topic}' yet. [/yellow]")
         console.print("Nothing was close enough to question you about.")
         raise typer.Exit(code=1)
-    
+
     try:
         with console.status("Finding a question to ask you..."):
             question = session.opening_question()
@@ -48,7 +48,7 @@ def ask(
         console.print(f"[red]Error:[/red] The question request failed: {e}")
         raise typer.Exit(code=1)
 
-    
+
     console.print("\n[dim]Answer in your own words. Blank line to end. [/dim]")
 
     while True:
@@ -69,7 +69,7 @@ def ask(
                 question = session.answer(reply)
 
         except anthropic.APIError as e:
-            console.print(f"[red]Error:[/red]The question request failed: {e}")
+            console.print(f"[red]Error:[/red] The question request failed: {e}")
             break
 
     console.print("\n[dim]Session ended.[/dim]")
@@ -77,5 +77,5 @@ def ask(
     if sources:
         console.print("\n[dim]Grounded in:[/dim]")
         for c in session.chunks:
-            label = f"{c.note_title} - {c.heading}" if c.heading else c.note_title
+            label = f"{c.note_title} — {c.heading}" if c.heading else c.note_title
             console.print(f"  [dim]{c.distance:.3f}  {label}[/dim]")
