@@ -269,7 +269,7 @@ def test_loading_a_session_that_does_not_exist(conn: sqlite3.Connection):
     assert load_session(conn, 999) is None
 
 
-def test_answered_turns_ignores_unanswered_ones(conn: sqlite3.Connection):
+def test_answered_count_ignores_unanswered_ones(conn: sqlite3.Connection):
     session_id = start_session(conn, "topic", "model", [make_chunk()])
     record_question(conn, session_id, 1, "Q1?")
     record_answer(conn, session_id, 1, "answered")
@@ -280,7 +280,7 @@ def test_answered_turns_ignores_unanswered_ones(conn: sqlite3.Connection):
     assert record is not None
     assert isinstance(record, SessionRecord)
     assert len(record.turns) == 2
-    assert record.answered_turns == 1
+    assert record.answered_count == 1
 
 
 # --- raw messages -------------------------------------------------------------

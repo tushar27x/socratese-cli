@@ -15,6 +15,8 @@ from anthropic.types import MessageParam
 from socratese.history.store import (
     connect,
     end_session,
+    last_ordinal,
+    reopen_session,
     record_answer,
     record_question,
     save_messages,
@@ -30,10 +32,15 @@ class SessionRecorder:
     That is what a failed database gets, so callers never branch on it.
     """
 
-    def __init__(self, conn: sqlite3.Connection | None, session_id: int | None) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection | None,
+        session_id: int | None,
+        start_at: int = 0,
+    ) -> None:
         self._conn = conn
         self.session_id = session_id
-        self._ordinal = 0
+        self._ordinal = start_at
 
     @property
     def enabled(self) -> bool:
@@ -87,6 +94,36 @@ def recording(
         return
 
     recorder = SessionRecorder(conn, session_id)
+    try:
+        yield recorder
+    finally:
+        try:
+            end_session(conn, session_id)
+        except sqlite3.Error:
+            pass
+        if owned:
+            conn.close()
+
+
+@contextmanager
+def resuming(
+    session_id: int, conn: sqlite3.Connection | None = None
+) -> Generator[SessionRecorder]:
+    """Continue recording into an existing session rather than opening a new one.
+
+    A resumed conversation belongs in the row it started in; splitting it would
+    fragment the transcript and burn two of the ten slots on one conversation.
+    """
+    owned = conn is None
+    try:
+        conn = conn or connect()
+        reopen_session(conn, session_id)
+        start_at = last_ordinal(conn, session_id)
+    except sqlite3.Error:
+        yield SessionRecorder(None, None)
+        return
+
+    recorder = SessionRecorder(conn, session_id, start_at=start_at)
     try:
         yield recorder
     finally:

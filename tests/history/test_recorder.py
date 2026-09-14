@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from socratese.history.recorder import SessionRecorder, recording
-from socratese.history.store import connect, load_session, recent_sessions
+from socratese.history.recorder import SessionRecorder, recording, resuming
+from socratese.history.store import MAX_SESSIONS, connect, load_session, recent_sessions
 from socratese.retrieval.models import RetrievedChunk
 
 
@@ -67,7 +67,7 @@ def test_an_unanswered_final_question_is_still_recorded(conn: sqlite3.Connection
     record = load_session(conn, session_id)
     assert record is not None
     assert record.turns[-1].answer is None
-    assert record.answered_turns == 1
+    assert record.answered_count == 1
 
 
 def test_the_session_is_closed_out_even_when_the_block_raises(conn: sqlite3.Connection):
@@ -125,3 +125,93 @@ def test_a_disabled_recorder_reports_itself_as_such():
     recorder.answer("A1")
 
     assert recorder.enabled is False
+
+
+# --- resuming -----------------------------------------------------------------
+
+
+def test_resuming_continues_the_same_session(conn: sqlite3.Connection):
+    """A resumed conversation belongs in the row it started in — splitting it
+    would fragment the transcript and burn two of the ten slots on one talk."""
+    with recording("topic", "model", [make_chunk()], conn=conn) as rec:
+        rec.question("Q1?")
+        rec.answer("A1")
+        original_id = rec.session_id
+    assert original_id is not None
+
+    with resuming(original_id, conn=conn) as rec:
+        assert rec.session_id == original_id
+        rec.question("Q2?")
+        rec.answer("A2")
+
+    assert len(recent_sessions(conn)) == 1
+    record = load_session(conn, original_id)
+    assert record is not None
+    assert [t.question for t in record.turns] == ["Q1?", "Q2?"]
+
+
+def test_resuming_counts_on_from_the_last_ordinal(conn: sqlite3.Connection):
+    """Restarting at 1 would violate UNIQUE(session_id, ordinal) and lose turns."""
+    with recording("topic", "model", [make_chunk()], conn=conn) as rec:
+        for i in range(1, 4):
+            rec.question(f"Q{i}?")
+            rec.answer(f"A{i}")
+        session_id = rec.session_id
+    assert session_id is not None
+
+    with resuming(session_id, conn=conn) as rec:
+        rec.question("Q4?")
+        rec.answer("A4")
+
+    record = load_session(conn, session_id)
+    assert record is not None
+    assert [t.ordinal for t in record.turns] == [1, 2, 3, 4]
+
+
+def test_resuming_marks_the_session_in_progress_then_finished(conn: sqlite3.Connection):
+    with recording("topic", "model", [make_chunk()], conn=conn) as rec:
+        rec.question("Q1?")
+        session_id = rec.session_id
+    assert session_id is not None
+    assert recent_sessions(conn)[0].is_complete
+
+    with resuming(session_id, conn=conn) as rec:
+        assert load_session(conn, session_id) is not None
+        assert not recent_sessions(conn)[0].is_complete  # reopened
+        rec.question("Q2?")
+
+    assert recent_sessions(conn)[0].is_complete  # closed out again
+
+
+def test_resuming_protects_a_session_from_being_pruned(conn: sqlite3.Connection):
+    """Pruning orders by last activity, not id, so a session you are still
+    working through outranks newer ones you abandoned."""
+    with recording("the one I care about", "model", [make_chunk()], conn=conn) as rec:
+        old_id = rec.session_id
+    assert old_id is not None
+
+    for i in range(MAX_SESSIONS - 1):
+        with recording(f"filler {i}", "model", [make_chunk()], conn=conn):
+            pass
+
+    with resuming(old_id, conn=conn) as rec:
+        rec.question("still going?")
+
+    with recording("one more", "model", [make_chunk()], conn=conn):
+        pass
+
+    surviving = {s.id for s in recent_sessions(conn, limit=100)}
+    assert old_id in surviving
+
+
+def test_resuming_a_broken_database_yields_a_disabled_recorder(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def boom(*args: object, **kwargs: object) -> sqlite3.Connection:
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr("socratese.history.recorder.connect", boom)
+
+    with resuming(1) as rec:
+        rec.question("Q1?")
+        assert rec.enabled is False

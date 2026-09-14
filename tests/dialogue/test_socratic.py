@@ -312,3 +312,65 @@ def test_an_injected_client_is_never_replaced(monkeypatch: pytest.MonkeyPatch):
     session.opening_question()
 
     assert session.client is fake  # type: ignore[comparison-overlap]
+
+
+# --- rebuilding a stored session ----------------------------------------------
+
+
+def test_from_messages_restores_the_conversation_history():
+    stored: list[Any] = [
+        {"role": "user", "content": "excerpts"},
+        {"role": "assistant", "content": "Q1?"},
+        {"role": "user", "content": "my answer"},
+        {"role": "assistant", "content": "Q2?"},
+    ]
+
+    session = Session.from_messages("topic", [make_chunk()], stored, client=cast(Anthropic, FakeClient()))
+
+    assert session.messages == stored
+
+
+def test_from_messages_resends_the_restored_history_on_the_next_turn():
+    """The point of storing raw messages: the model must see the whole prior
+    conversation, not just the reply that resumed it."""
+    fake = FakeClient()
+    stored: list[Any] = [
+        {"role": "user", "content": "excerpts"},
+        {"role": "assistant", "content": "Q1?"},
+    ]
+    session = Session.from_messages("topic", [make_chunk()], stored, client=cast(Anthropic, fake))
+
+    session.answer("picking up again")
+
+    sent = fake.messages.calls[0]["messages"]
+    assert len(sent) == 3
+    assert sent[0]["content"] == "excerpts"
+
+
+def test_from_messages_keeps_every_stored_chunk():
+    """Chunks were filtered when the session first started. Re-filtering here
+    would drop notes the conversation has already been quoting."""
+    chunks = [make_chunk("Near", distance=0.7), make_chunk("AlsoKept", distance=1.19)]
+
+    session = Session.from_messages("topic", chunks, [], client=cast(Anthropic, FakeClient()))
+
+    assert [c.note_title for c in session.chunks] == ["Near", "AlsoKept"]
+
+
+def test_from_messages_does_not_alias_the_stored_lists():
+    """The record came from the database; mutating it through the session
+    would corrupt the caller's copy."""
+    chunks = [make_chunk()]
+    stored: list[Any] = [{"role": "user", "content": "excerpts"}]
+
+    session = Session.from_messages("topic", chunks, stored, client=cast(Anthropic, FakeClient()))
+    session.answer("a reply")
+
+    assert len(stored) == 1
+    assert len(chunks) == 1
+
+
+def test_from_messages_has_grounding_when_chunks_were_stored():
+    session = Session.from_messages("topic", [make_chunk()], [], client=cast(Anthropic, FakeClient()))
+
+    assert session.has_grounding

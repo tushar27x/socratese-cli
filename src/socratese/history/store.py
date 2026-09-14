@@ -89,10 +89,16 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 
 
 def _prune(conn: sqlite3.Connection, keep: int) -> int:
-    """Drop all but the `keep` most recent sessions. Returns how many went."""
+    """Drop all but the `keep` most recently *active* sessions.
+
+    Ordered by last activity rather than id so that resuming an old session
+    protects it — otherwise a conversation you are still working through could
+    be culled by newer ones you abandoned.
+    """
     cursor = conn.execute(
         "DELETE FROM sessions WHERE id NOT IN ("
-        "  SELECT id FROM sessions ORDER BY id DESC LIMIT ?"
+        "  SELECT id FROM sessions"
+        "  ORDER BY COALESCE(ended_at, started_at) DESC, id DESC LIMIT ?"
         ")",
         (keep,),
     )
@@ -178,6 +184,27 @@ def end_session(conn: sqlite3.Connection, session_id: int) -> None:
     conn.commit()
 
 
+def reopen_session(conn: sqlite3.Connection, session_id: int) -> None:
+    """Mark a stored session as in progress again, for resuming."""
+    conn.execute("UPDATE sessions SET ended_at = NULL WHERE id = ?", (session_id,))
+    conn.commit()
+
+
+def last_ordinal(conn: sqlite3.Connection, session_id: int) -> int:
+    """Highest turn number recorded, or 0. A resumed recorder counts on from here."""
+    row = conn.execute(
+        "SELECT MAX(ordinal) AS n FROM turns WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    return row["n"] or 0
+
+
+#: Counted in SQL so a listing reports it correctly without loading every turn.
+_ANSWERED_COUNT = (
+    "SELECT COUNT(*) FROM turns"
+    " WHERE turns.session_id = sessions.id AND turns.answer IS NOT NULL"
+)
+
+
 def _row_to_record(row: sqlite3.Row) -> SessionRecord:
     return SessionRecord(
         id=row["id"],
@@ -186,20 +213,26 @@ def _row_to_record(row: sqlite3.Row) -> SessionRecord:
         started_at=datetime.fromisoformat(row["started_at"]),
         ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
         messages=json.loads(row["messages"]) if row["messages"] else [],
+        answered_count=row["answered_count"],
     )
 
 
 def recent_sessions(conn: sqlite3.Connection, limit: int = MAX_SESSIONS) -> list[SessionRecord]:
     """Most recent first. Turns and chunks are not loaded — use `load_session`."""
     rows = conn.execute(
-        "SELECT * FROM sessions ORDER BY id DESC LIMIT ?", (limit,)
+        f"SELECT *, ({_ANSWERED_COUNT}) AS answered_count FROM sessions"
+        " ORDER BY COALESCE(ended_at, started_at) DESC, id DESC LIMIT ?",
+        (limit,),
     ).fetchall()
     return [_row_to_record(row) for row in rows]
 
 
 def load_session(conn: sqlite3.Connection, session_id: int) -> SessionRecord | None:
     """Fully hydrate one session, including its turns and grounding chunks."""
-    row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    row = conn.execute(
+        f"SELECT *, ({_ANSWERED_COUNT}) AS answered_count FROM sessions WHERE id = ?",
+        (session_id,),
+    ).fetchone()
     if row is None:
         return None
 

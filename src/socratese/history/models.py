@@ -36,6 +36,10 @@ class SessionRecord:
     #: sessions recorded before raw messages were stored.
     messages: list[MessageParam] = field(default_factory=list[MessageParam])
     turns: list[Turn] = field(default_factory=list[Turn])
+    #: How many turns the user actually answered. Populated by the store for
+    #: both listings and full loads, so it is correct even when `turns` is not
+    #: hydrated — computing it from `turns` silently reported 0 for listings.
+    answered_count: int = 0
     chunks: list[RetrievedChunk] = field(default_factory=list[RetrievedChunk])
 
     @property
@@ -43,9 +47,6 @@ class SessionRecord:
         """Older sessions have turns but no raw messages, so cannot be replayed."""
         return bool(self.messages)
 
-    @property
-    def answered_turns(self) -> int:
-        return sum(1 for t in self.turns if t.answer)
 
     @property
     def is_complete(self) -> bool:
