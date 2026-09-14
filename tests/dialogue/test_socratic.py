@@ -10,12 +10,17 @@ from socratese.dialogue.prompt import SYSTEM_PROMPT
 from socratese.dialogue.socratic import (
     DEFAULT_MODEL,
     RELEVANCE_THRESHOLD,
-    ask_questions,
+    Session,
     get_client,
 )
 from socratese.retrieval.models import RetrievedChunk
 
-def make_chunk(note_title: str = "Redis Persistence", content: str = "Redis forks to write a snapshot.", distance: float = 0.7, ) -> RetrievedChunk:
+
+def make_chunk(
+    note_title: str = "Transformer Architecture",
+    content: str = "A high score means the model uses more of the value vector.",
+    distance: float = 0.7,
+) -> RetrievedChunk:
     return RetrievedChunk(
         note_path=Path(f"notes/{note_title}.md"),
         note_title=note_title,
@@ -25,183 +30,259 @@ def make_chunk(note_title: str = "Redis Persistence", content: str = "Redis fork
     )
 
 
-def text_block(text: str):
-    return SimpleNamespace(type="text", text=text)
-
-
-def thinking_block(thinking: str = "reasoning..."):
-    """A non-text block with no `.text` attribute at all — so a filter that
-    stopped checking `.type` would raise AttributeError rather than pass."""
-    return SimpleNamespace(type="thinking", thinking=thinking)
-
-
 class FakeMessages:
-    """Stands in for client.messages — records each call, returns fixed blocks."""
+    """Stands in for client.messages — records every call, returns numbered replies."""
 
-    def __init__(self, blocks: list[Any]):
-        self.blocks = blocks
-        self.last_call: dict[str, Any] = {}
-        self.call_count = 0
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
 
     def create(self, **kwargs: Any) -> SimpleNamespace:
-        self.last_call = kwargs
-        self.call_count += 1
-        return SimpleNamespace(content=self.blocks)
+        # snapshot: the session passes its live message list by reference,
+        # and a real client serialises immediately rather than aliasing it
+        self.calls.append({**kwargs, "messages": list(kwargs["messages"])})
+        text = f"question {len(self.calls)}?"
+        return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)])
 
 
 class FakeClient:
-    def __init__(self, blocks: list[Any] | None = None) -> None:
-        if blocks is None:
-            blocks = [text_block("What happens to concurrent writes?")]
-        self.messages = FakeMessages(blocks)
+    def __init__(self) -> None:
+        self.messages = FakeMessages()
 
 
-# --- the relevance gate -------------------------------------------------------
+def session_with(
+    chunks: list[RetrievedChunk], topic: str = "attention"
+) -> tuple[Session, FakeClient]:
+    fake = FakeClient()
+    return Session(topic, chunks, client=cast(Anthropic, fake)), fake
 
 
-def test_returns_the_no_match_message_when_every_chunk_is_too_distant():
-    client = FakeClient()
-    far = [make_chunk(distance=RELEVANCE_THRESHOLD + 0.1)]
-
-    result = ask_questions("vector databases", far, client=cast(Anthropic, client))
-
-    assert result is None
+# --- grounding ----------------------------------------------------------------
 
 
-def test_does_not_call_the_api_when_every_chunk_is_too_distant():
-    """The gate exists to avoid spending a request on notes we already know are
-    irrelevant. Asserting only on the return value would still pass if the
-    filter ran after the call."""
-    client = FakeClient()
-    far = [make_chunk(distance=RELEVANCE_THRESHOLD + 0.1)]
+def test_chunks_are_filtered_by_threshold_at_construction():
+    near, far = make_chunk("Near", distance=0.7), make_chunk("Far", distance=1.4)
 
-    ask_questions("vector databases", far, client=cast(Anthropic, client))
+    session, _ = session_with([near, far])
 
-    assert client.messages.call_count == 0
-
-
-def test_empty_chunk_list_short_circuits_without_calling_the_api():
-    client = FakeClient()
-
-    result = ask_questions("anything", [], client=cast(Anthropic, client))
-
-    assert result is None
-    assert client.messages.call_count == 0
+    assert [c.note_title for c in session.chunks] == ["Near"]
 
 
 def test_a_chunk_exactly_at_the_threshold_is_kept():
-    """Pins the boundary as inclusive (`<=`). Flipping to `<` would silently
-    drop borderline matches, and no other assertion here would notice."""
-    client = FakeClient()
+    """Pins `<=` as inclusive, matching the single-shot path."""
+    session, _ = session_with([make_chunk(distance=RELEVANCE_THRESHOLD)])
 
-    ask_questions("topic", [make_chunk(distance=RELEVANCE_THRESHOLD)], client=cast(Anthropic, client))
-
-    assert client.messages.call_count == 1
+    assert session.has_grounding
 
 
-def test_only_chunks_under_the_threshold_reach_the_prompt():
-    client = FakeClient()
-    chunks = [
-        make_chunk(note_title="Near", content="relevant body", distance=0.7),
-        make_chunk(note_title="Far", content="irrelevant body", distance=RELEVANCE_THRESHOLD + 0.5),
+def test_has_grounding_is_false_when_every_chunk_is_too_distant():
+    session, _ = session_with([make_chunk(distance=RELEVANCE_THRESHOLD + 0.1)])
+
+    assert session.has_grounding is False
+
+
+def test_has_grounding_is_false_for_no_chunks_at_all():
+    session, _ = session_with([])
+
+    assert session.has_grounding is False
+
+
+def test_checking_grounding_does_not_build_a_client(monkeypatch: pytest.MonkeyPatch):
+    """Being told your vault has nothing on a topic must not require credentials.
+
+    The client is lazy precisely so this path works with no API key set.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    session = Session("attention", [make_chunk(distance=1.4)])
+
+    assert session.has_grounding is False  # would raise ValueError if eager
+
+
+def test_dropped_chunks_never_reach_the_prompt():
+    near = make_chunk("Near", content="kept body", distance=0.7)
+    far = make_chunk("Far", content="dropped body", distance=1.4)
+    session, fake = session_with([near, far])
+
+    session.opening_question()
+
+    sent = str(fake.messages.calls[0]["messages"][0]["content"])
+    assert "kept body" in sent
+    assert "dropped body" not in sent
+
+
+# --- conversation state -------------------------------------------------------
+
+
+def test_opening_question_seeds_history_with_the_excerpts():
+    session, _ = session_with([make_chunk(content="Q dot K scores the match.")])
+
+    session.opening_question()
+
+    assert session.messages[0]["role"] == "user"
+    assert "Q dot K scores the match." in str(session.messages[0]["content"])
+
+
+def test_the_models_own_question_is_recorded_as_an_assistant_turn():
+    """Without this the model cannot see what it already asked, and rule 9
+    ("never repeat a question") has nothing to work from."""
+    session, _ = session_with([make_chunk()])
+
+    question = session.opening_question()
+
+    assert session.messages[-1] == {"role": "assistant", "content": question}
+
+
+def test_history_alternates_user_and_assistant_across_turns():
+    session, _ = session_with([make_chunk()])
+
+    session.opening_question()
+    session.answer("my first answer")
+    session.answer("my second answer")
+
+    assert [m["role"] for m in session.messages] == [
+        "user", "assistant", "user", "assistant", "user", "assistant"
     ]
 
-    ask_questions("topic", chunks, client=cast(Anthropic, client))
 
-    sent = client.messages.last_call["messages"][0]["content"]
-    assert "relevant body" in sent
-    assert "irrelevant body" not in sent
+def test_each_turn_resends_the_whole_conversation():
+    """The Messages API is stateless — a turn that sent only the latest reply
+    would strip the grounding and every prior question."""
+    session, fake = session_with([make_chunk()])
+
+    session.opening_question()
+    session.answer("an answer")
+
+    assert len(fake.messages.calls[0]["messages"]) == 1
+    assert len(fake.messages.calls[1]["messages"]) == 3
+
+
+def test_the_answer_is_sent_verbatim():
+    session, fake = session_with([make_chunk()])
+    session.opening_question()
+
+    session.answer("softmax turns the scores into weights")
+
+    assert fake.messages.calls[1]["messages"][2] == {
+        "role": "user",
+        "content": "softmax turns the scores into weights",
+    }
+
+
+def test_grounding_is_not_re_sent_on_every_turn():
+    """The excerpts are seeded once. Re-appending them each turn would bloat
+    the history and let the model drift onto the newest copy."""
+    session, fake = session_with([make_chunk(content="unique body text")])
+
+    session.opening_question()
+    session.answer("an answer")
+
+    payload = str(fake.messages.calls[1]["messages"])
+    assert payload.count("unique body text") == 1
+
+
+def test_one_api_call_per_turn():
+    session, fake = session_with([make_chunk()])
+
+    session.opening_question()
+    session.answer("a")
+    session.answer("b")
+
+    assert len(fake.messages.calls) == 3
 
 
 # --- the request --------------------------------------------------------------
 
 
-def test_sends_the_system_prompt_separately_from_the_notes():
-    """The system half must stay byte-stable across queries so it can be cached
-    later; the per-query notes belong in the user turn."""
-    client = FakeClient()
+def test_every_turn_sends_the_system_prompt():
+    session, fake = session_with([make_chunk()])
 
-    ask_questions("topic", [make_chunk()], client=cast(Anthropic, client))
+    session.opening_question()
+    session.answer("an answer")
 
-    call = client.messages.last_call
-    assert call["system"] == SYSTEM_PROMPT
-    assert call["messages"] == [{"role": "user", "content": call["messages"][0]["content"]}]
-    assert SYSTEM_PROMPT not in call["messages"][0]["content"]
-
-
-def test_sends_the_topic_and_the_chunk_content_in_the_user_turn():
-    client = FakeClient()
-
-    ask_questions("how does redis persist data?", [make_chunk(content="fork and snapshot")], client=cast(Anthropic, client))
-
-    sent = client.messages.last_call["messages"][0]["content"]
-    assert "how does redis persist data?" in sent
-    assert "fork and snapshot" in sent
+    assert all(call["system"] == SYSTEM_PROMPT for call in fake.messages.calls)
 
 
 def test_uses_the_default_model_when_no_override_is_set(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("DIALOGUE_MODEL", raising=False)
-    client = FakeClient()
+    session, fake = session_with([make_chunk()])
 
-    ask_questions("topic", [make_chunk()], client=cast(Anthropic, client))
+    session.opening_question()
 
-    assert client.messages.last_call["model"] == DEFAULT_MODEL
+    assert fake.messages.calls[0]["model"] == DEFAULT_MODEL
 
 
 def test_dialogue_model_env_var_overrides_the_default(monkeypatch: pytest.MonkeyPatch):
-    """Read inside the function, not at import time — so a value loaded from
-    .env after this module is imported still takes effect."""
-    monkeypatch.setenv("DIALOGUE_MODEL", "claude-sonnet-5")
-    client = FakeClient()
+    monkeypatch.setenv("DIALOGUE_MODEL", "claude-opus-5")
+    session, fake = session_with([make_chunk()])
 
-    ask_questions("topic", [make_chunk()], client=cast(Anthropic, client))
+    session.opening_question()
 
-    assert client.messages.last_call["model"] == "claude-sonnet-5"
-
-
-def test_requests_enough_output_tokens_for_a_complete_question(monkeypatch: pytest.MonkeyPatch):
-    """max_tokens is a ceiling, not a reservation — unused tokens cost nothing,
-    and a tight cap would truncate a long question mid-sentence."""
-    client = FakeClient()
-
-    ask_questions("topic", [make_chunk()], client=cast(Anthropic, client))
-
-    assert client.messages.last_call["max_tokens"] >= 2048
+    assert fake.messages.calls[0]["model"] == "claude-opus-5"
 
 
 # --- the response -------------------------------------------------------------
 
 
-def test_returns_the_text_of_the_response():
-    client = FakeClient([text_block("What happens to concurrent writes?")])
+def test_returns_the_text_of_each_reply():
+    session, _ = session_with([make_chunk()])
 
-    result = ask_questions("topic", [make_chunk()], client=cast(Anthropic, client))
+    assert session.opening_question() == "question 1?"
+    assert session.answer("a") == "question 2?"
 
-    assert result == "What happens to concurrent writes?"
+
+def test_ignores_non_text_blocks():
+    """A block with no `.text` attribute at all, so a filter that stopped
+    checking `.type` would raise rather than quietly pass."""
+    session, fake = session_with([make_chunk()])
+    fake.messages.create = lambda **kwargs: SimpleNamespace(  # type: ignore[method-assign]
+        content=[
+            SimpleNamespace(type="thinking", thinking="..."),
+            SimpleNamespace(type="text", text="  the question?  "),
+        ]
+    )
+
+    assert session.opening_question() == "the question?"
 
 
-def test_ignores_non_text_blocks_in_the_response():
-    client = FakeClient([thinking_block(), text_block("The question?")])
+def test_the_system_prompt_is_not_duplicated_into_the_user_turn():
+    """System and notes are separate halves. Folding the rules into the user
+    turn would make the cached prefix vary with every query."""
+    session, fake = session_with([make_chunk()])
 
-    result = ask_questions("topic", [make_chunk()], client=cast(Anthropic, client))
+    session.opening_question()
 
-    assert result == "The question?"
+    call = fake.messages.calls[0]
+    assert call["system"] == SYSTEM_PROMPT
+    assert SYSTEM_PROMPT not in str(call["messages"][0]["content"])
+
+
+def test_the_topic_is_sent_alongside_the_excerpts():
+    session, fake = session_with([make_chunk()], topic="how does redis persist data?")
+
+    session.opening_question()
+
+    assert "how does redis persist data?" in str(fake.messages.calls[0]["messages"][0]["content"])
+
+
+def test_requests_enough_output_tokens_for_a_complete_question():
+    """max_tokens is a ceiling, not a reservation — unused tokens cost nothing,
+    and a tight cap would truncate a question mid-sentence."""
+    session, fake = session_with([make_chunk()])
+
+    session.opening_question()
+
+    assert fake.messages.calls[0]["max_tokens"] >= 2048
 
 
 def test_joins_multiple_text_blocks_in_order():
-    client = FakeClient([text_block("First half "), text_block("second half?")])
+    session, fake = session_with([make_chunk()])
+    fake.messages.create = lambda **kwargs: SimpleNamespace(  # type: ignore[method-assign]
+        content=[
+            SimpleNamespace(type="text", text="First half "),
+            SimpleNamespace(type="text", text="second half?"),
+        ]
+    )
 
-    result = ask_questions("topic", [make_chunk()], client=cast(Anthropic, client))
-
-    assert result == "First half second half?"
-
-
-def test_strips_surrounding_whitespace_from_the_question():
-    client = FakeClient([text_block("\n  A question?  \n")])
-
-    result = ask_questions("topic", [make_chunk()], client=cast(Anthropic, client))
-
-    assert result == "A question?"
+    assert session.opening_question() == "First half second half?"
 
 
 # --- client construction ------------------------------------------------------
@@ -222,12 +303,12 @@ def test_get_client_returns_client_when_api_key_set(monkeypatch: pytest.MonkeyPa
     assert client.api_key == "fake-key-for-testing"
 
 
-def test_ask_questions_does_not_build_a_real_client_when_one_is_injected(monkeypatch: pytest.MonkeyPatch):
-    """The injection seam must short-circuit get_client entirely — otherwise the
-    whole suite would need ANTHROPIC_API_KEY set to run."""
+def test_an_injected_client_is_never_replaced(monkeypatch: pytest.MonkeyPatch):
+    """The injection seam must short-circuit get_client entirely, or the whole
+    suite would need ANTHROPIC_API_KEY set to run."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    client = FakeClient()
+    session, fake = session_with([make_chunk()])
 
-    result = ask_questions("topic", [make_chunk()], client=cast(Anthropic, client))
+    session.opening_question()
 
-    assert result == "What happens to concurrent writes?"
+    assert session.client is fake  # type: ignore[comparison-overlap]
