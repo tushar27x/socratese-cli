@@ -1,5 +1,6 @@
 from __future__ import annotations
-from datetime import datetime,timezone
+from collections.abc import Callable
+from datetime import datetime, timezone
 import typer
 import openai
 from rich.console import Console
@@ -15,14 +16,27 @@ from socratese.vectorstore.store import add_chunks
 
 console = Console(soft_wrap=True)
 
-def index_vault(vault: Vault) -> int:
+def index_vault(
+    vault: Vault, on_progress: Callable[[str, int, int], None] | None = None
+) -> int:
+    """Parse, chunk, embed and store one vault. Returns the chunk count.
+
+    `on_progress(stage, done, total)` lets a caller render progress without
+    this function knowing what a console or a terminal app looks like.
+    """
     if not (vault.path / VAULT_MARKER).is_dir():
         console.print(
             f"[red]Error:[/red] Vault '{vault.name}' at {vault.path} is not valid, skipping."
         )
         return 0
 
+    def report(stage: str, done: int = 0, total: int = 0) -> None:
+        if on_progress:
+            on_progress(stage, done, total)
+
+    report("parsing")
     notes = list(parse_vault(vault.path))
+    report("chunking", len(notes), len(notes))
     chunks = chunk_notes(notes)
 
     if not chunks:
@@ -30,10 +44,15 @@ def index_vault(vault: Vault) -> int:
         return 0
 
     with Progress(console=console) as progress:
-        task = progress.add_task(f"Embedding '{vault.name}'...", total=1)
-        embeddings = embed_chunks(chunks)
-        progress.update(task, advance=1)
+        task = progress.add_task(f"Embedding '{vault.name}'...", total=len(chunks))
 
+        def advance(done: int, total: int) -> None:
+            progress.update(task, completed=done)
+            report("embedding", done, total)
+
+        embeddings = embed_chunks(chunks, on_progress=advance)
+
+    report("storing", len(chunks), len(chunks))
     add_chunks(chunks, embeddings, vault.name)
     vault.last_indexed = datetime.now(timezone.utc)
 

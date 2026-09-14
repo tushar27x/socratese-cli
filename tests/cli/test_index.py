@@ -1,6 +1,8 @@
 # tests/cli/test_index.py
 from pathlib import Path
 import pytest
+from collections.abc import Callable
+
 import httpx2
 import openai
 from socratese.chunking.models import Chunk
@@ -25,7 +27,18 @@ def make_vault(tmp_path: Path, name: str, notes: dict[str, str]) -> Vault:
     return Vault(name=name, path=vault_dir)
 
 
-def fake_embed_chunks(chunks: list[Chunk], client: OpenAI | None = None) -> list[list[float]]:
+#: Progress reports seen by the fake embedder, so tests can assert the bar
+#: is actually driven rather than merely wired.
+embed_progress: list[tuple[int, int]] = []
+
+
+def fake_embed_chunks(
+    chunks: list[Chunk],
+    client: OpenAI | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[list[float]]:
+    if on_progress:
+        on_progress(len(chunks), len(chunks))
     return [[0.1, 0.2, 0.3] for _chunk in chunks]
 
 
@@ -123,7 +136,11 @@ def test_index_api_error_stops_and_preserves_prior_progress(tmp_path: Path, monk
 
     call_count = {"n": 0}
 
-    def embed_then_fail(chunks: list[Chunk], client: OpenAI | None = None) -> list[list[float]]:
+    def embed_then_fail(
+        chunks: list[Chunk],
+        client: OpenAI | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> list[list[float]]:
         call_count["n"] += 1
         if call_count["n"] == 1:
             return fake_embed_chunks(chunks)

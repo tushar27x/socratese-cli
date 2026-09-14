@@ -17,7 +17,8 @@ import anthropic
 import openai
 from textual import work
 from textual.app import App, ComposeResult
-from textual.widgets import Input, RichLog
+from textual.containers import VerticalScroll
+from textual.widgets import Input, ProgressBar, Static
 
 from socratese import tutor
 from socratese.dialogue.socratic import DEFAULT_MODEL, Session
@@ -52,6 +53,11 @@ class SocrateseApp(App[None]):
         background: transparent;
         padding: 0 1;
         scrollbar-size-vertical: 1;
+        overflow-x: hidden;
+    }
+    #log Static {
+        background: transparent;
+        width: 100%;
     }
     #entry {
         dock: bottom;
@@ -62,6 +68,16 @@ class SocrateseApp(App[None]):
     }
     #entry:focus {
         border: round ansi_bright_blue;
+    }
+    #progress {
+        dock: bottom;
+        height: 1;
+        padding: 0 2;
+        background: transparent;
+        display: none;
+    }
+    #progress.running {
+        display: block;
     }
     """
 
@@ -84,7 +100,14 @@ class SocrateseApp(App[None]):
     def compose(self) -> ComposeResult:
         # No Header or Footer: both paint a solid bar, and a docked Footer
         # competes with the input for the bottom rows and clips its border.
-        yield RichLog(id="log", wrap=True, markup=True, highlight=False)
+        #
+        # A scroll of Static widgets rather than a RichLog: RichLog wraps text
+        # once, when it is written, and never again. Increasing the terminal's
+        # font scale means fewer columns, which left every earlier line too
+        # wide and cut off behind a horizontal scrollbar. Static re-wraps
+        # itself whenever its width changes.
+        yield VerticalScroll(id="log")
+        yield ProgressBar(id="progress", show_eta=False)
         yield Input(
             placeholder="Type an answer, or /help",
             id="entry",
@@ -100,7 +123,9 @@ class SocrateseApp(App[None]):
     # --- output ---------------------------------------------------------
 
     def say(self, markup: str) -> None:
-        self.query_one("#log", RichLog).write(markup)
+        log = self.query_one("#log", VerticalScroll)
+        log.mount(Static(markup, markup=True))
+        log.scroll_end(animate=False)
 
     def say_question(self, question: str) -> None:
         self.say("")
@@ -230,8 +255,21 @@ class SocrateseApp(App[None]):
         if not rest:
             self.say_error("Name a vault, or 'all': /index learning")
             return
-        self.say(f"[dim]Indexing {rest}...[/dim]")
         self.run_index(rest)
+
+    # --- progress ---------------------------------------------------------
+
+    def progress_start(self, label: str, total: int) -> None:
+        bar = self.query_one("#progress", ProgressBar)
+        bar.update(total=total or None, progress=0)
+        bar.add_class("running")
+        self.say(f"[dim]{label}[/dim]")
+
+    def progress_to(self, done: int, total: int) -> None:
+        self.query_one("#progress", ProgressBar).update(total=total or None, progress=done)
+
+    def progress_done(self) -> None:
+        self.query_one("#progress", ProgressBar).remove_class("running")
 
     # --- views ----------------------------------------------------------
 
@@ -425,9 +463,27 @@ class SocrateseApp(App[None]):
             self.call_from_thread(self.say_error, f"No vault named '{name}'.")
             return
 
+        STAGES = {
+            "parsing": "Reading notes",
+            "chunking": "Splitting into chunks",
+            "embedding": "Embedding",
+            "storing": "Storing",
+        }
+
         try:
             for vault in targets:
-                chunks = index_vault(vault)
+                seen: set[str] = set()
+
+                def report(stage: str, done: int, total: int, name: str = vault.name) -> None:
+                    if stage not in seen:
+                        seen.add(stage)
+                        self.call_from_thread(
+                            self.progress_start, f"{STAGES[stage]} — {name}", total
+                        )
+                    elif total:
+                        self.call_from_thread(self.progress_to, done, total)
+
+                chunks = index_vault(vault, on_progress=report)
                 self.call_from_thread(
                     self.say, f"[ansi_green]Indexed[/ansi_green] {vault.name}: {chunks} chunks."
                 )
@@ -435,6 +491,7 @@ class SocrateseApp(App[None]):
             self.call_from_thread(self.say_error, f"Embedding failed: {e}")
         finally:
             save_vaults(vaults)
+            self.call_from_thread(self.progress_done)
 
 
 def run() -> None:
