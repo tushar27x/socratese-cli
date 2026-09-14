@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import anthropic
 import openai
 import typer
@@ -7,8 +9,9 @@ from rich.console import Console
 from rich.panel import Panel
 
 from socratese.config import load_vaults
+from socratese.dialogue.socratic import DEFAULT_MODEL, Session
+from socratese.history.recorder import recording
 from socratese.retrieval.retriever import retrieve
-from socratese.dialogue.socratic import Session
 
 
 console = Console()
@@ -38,39 +41,45 @@ def ask(
         console.print("Nothing was close enough to question you about.")
         raise typer.Exit(code=1)
 
-    try:
-        with console.status("Finding a question to ask you..."):
-            question = session.opening_question()
-    except anthropic.AuthenticationError as e:
-        console.print("[red]Error:[/red] ANTHROPIC_API_KEY is missing or invalid. Check your .env file.")
-        raise typer.Exit(code=1)
-    except anthropic.APIError as e:
-        console.print(f"[red]Error:[/red] The question request failed: {e}")
-        raise typer.Exit(code=1)
+    model = os.environ.get("DIALOGUE_MODEL", DEFAULT_MODEL)
 
-
-    console.print("\n[dim]Answer in your own words. Blank line to end. [/dim]")
-
-    while True:
-        console.print()
-        console.print(Panel(question, border_style="cyan", padding=(1,2)))
-
+    with recording(topic, model, session.chunks) as history:
         try:
-            reply = console.input("\n[bold cyan]>[/bold cyan] ").strip()
-        except (EOFError, KeyboardInterrupt):
-            console.print()
-            break
-
-        if not reply:
-            break
-
-        try:
-            with console.status("Thinking..."):
-                question = session.answer(reply)
-
+            with console.status("Finding a question to ask you..."):
+                question = session.opening_question()
+        except anthropic.AuthenticationError:
+            console.print("[red]Error:[/red] ANTHROPIC_API_KEY is missing or invalid. Check your .env file.")
+            raise typer.Exit(code=1)
         except anthropic.APIError as e:
             console.print(f"[red]Error:[/red] The question request failed: {e}")
-            break
+            raise typer.Exit(code=1)
+
+        history.question(question)
+        console.print("\n[dim]Answer in your own words. Blank line to end.[/dim]")
+
+        while True:
+            console.print()
+            console.print(Panel(question, border_style="cyan", padding=(1, 2)))
+
+            try:
+                reply = console.input("\n[bold cyan]>[/bold cyan] ").strip()
+            except (EOFError, KeyboardInterrupt):
+                console.print()
+                break
+
+            if not reply:
+                break
+
+            history.answer(reply)
+
+            try:
+                with console.status("Thinking..."):
+                    question = session.answer(reply)
+            except anthropic.APIError as e:
+                console.print(f"[red]Error:[/red] The question request failed: {e}")
+                break
+
+            history.question(question)
 
     console.print("\n[dim]Session ended.[/dim]")
 
