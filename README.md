@@ -10,6 +10,8 @@ asking, following up on whatever your answer reveals you haven't grasped yet.
 The premise is that re-reading your notes feels like learning and mostly isn't.
 Being asked to reconstruct them from memory is harder, less pleasant, and works.
 
+![A session in the terminal app: asked about Docker, answering, saying "no idea", and being pointed back at a specific note instead of told](docs/demo.gif)
+
 ## A real session
 
 ```
