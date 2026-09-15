@@ -1,6 +1,6 @@
 # Socratese — Progress
 
-Last updated: 2026-09-14 (phase-5-polish branch)
+Last updated: 2026-09-15 (textual-tui branch)
 
 Status/continuity doc for picking this project back up in a new session.
 For *why* decisions were made, see `CLAUDE.md` section 5 (the living
@@ -275,12 +275,69 @@ Opus, and it did not happen.
 excerpts. Partial answers and surrender are covered; a confidently wrong
 answer is not.
 
-Tests: 102 passing, mirroring source structure under `tests/` —
+**Session history, resume, stall detection, vault filtering — built,
+tested, used. Merged as PRs #2 and #3.**
+
+- `history/store.py` + `history/recorder.py` — SQLite at
+  `user_data_dir/sessions.db`, last ten sessions, incremental writes, raw
+  messages stored for replay. A broken database degrades to not recording;
+  it never costs a tutoring session. The existing real database was
+  migrated in place (`ALTER TABLE` when the `messages` column is absent).
+- `socratese resume [id]` — lists recent sessions or continues one, in the
+  same row, from stored chunks. Verified against the real database: a
+  resumed session continued its ordinals and added no duplicate row.
+- `dialogue/stall.py` — orbiting detection over a four-question window.
+  The CLI warns when a conversation circles, and reveals the notes on exit
+  whether or not `--sources` was passed. This replaced three failed prompt
+  attempts; see the decisions log for why it lives in code.
+- `--vault / -v` on `ask`, backed by a `vault` metadata tag on every chunk
+  and a `where` filter inside Chroma. Real index re-indexed (851 chunks, all
+  tagged, no duplicates).
+- `tutor.py` — the setup sequence the CLI and TUI now share.
+
+**The terminal app — built and tested; this branch.**
+
+- `tui/app.py`, `tui/commands.py`, `tui/vault_picker.py`. Bare `socratese`
+  opens it; the subcommands stay for scripting.
+- Commands: `/ask`, `/resume`, `/vaults` (modal picker, or typed names),
+  `/add`, `/index` (with a real progress bar), `/sources`, `/end`, `/help`,
+  `/quit`. Plain text answers the current question and is echoed as `> …`.
+  Slash commands get ghost-text completion, case-insensitively.
+- Inherits the terminal's theme (`ansi_color=True`, transparent
+  backgrounds, no Header/Footer). Text re-wraps on resize. The transcript
+  never scrolls under the input.
+- Embedding is batched at 128 per request, which is what makes the progress
+  bar real.
+
+Three real bugs from building the TUI, worth knowing the shape of:
+1. **SQLite connections cannot cross threads.** The worker opened the
+   history connection; `/end` closed it on the event loop. Would have fired
+   for every user on their first `/end`. `check_same_thread=False`, safe for
+   reasons checked and written into the code.
+2. **`query_one(..., SelectionList[str])` crashes at runtime.** Pyright
+   accepted the subscripted generic; `isinstance` rejected it. A
+   type-checker-clean change to a runtime-checked call is not a safe change.
+3. **The progress bar rendered on the input's border row, invisible.** Both
+   were `dock: bottom`. My test asserted the CSS class was set — which it
+   was — and passed while nothing showed. Geometry assertions replaced it.
+
+Three vacuous assertions were found and replaced in this branch — asserting a
+CSS class instead of a region, asserting a position that never changes,
+and a test helper that returned widget reprs so phrases could never match.
+Same mistake each time: testing the mechanism rather than the outcome. The
+`# type: ignore` comments that had been hiding pyright errors in the TUI
+tests were removed by typing the app explicitly.
+
+Tests: 245 passing, mirroring source structure under `tests/` —
 `vault/test_models.py`, `test_config.py`, `vault/test_discovery.py`,
 `cli/test_vault.py`, `cli/test_index.py`, `ingest/test_parser.py`,
 `chunking/test_chunker.py`, `embedding/test_embedder.py`,
 `vectorstore/test_store.py`, `retrieval/test_retriever.py`,
-`dialogue/test_prompt.py`, `dialogue/test_socratic.py`.
+`dialogue/test_prompt.py`, `dialogue/test_socratic.py`, `dialogue/test_stall.py`,
+`history/test_store.py`, `history/test_recorder.py`, `test_tutor.py`,
+`tui/test_commands.py`, `tui/test_app.py`, `tui/test_vault_picker.py`.
+The TUI tests drive the app headlessly through Textual's pilot
+(`pytest-asyncio`, `asyncio_mode = "auto"`).
 Config/vault tests use `monkeypatch` on `config.get_config_path` to avoid
 touching the real `~/.config/socratese/config.toml`. CLI tests use
 `typer.testing.CliRunner`. Ingest/chunking tests use pytest's `tmp_path`
@@ -442,55 +499,48 @@ first evidence that a 1.2 cutoff is doing less work than the numbers suggest.
 
 ## Not built yet (known gaps, deliberately deferred)
 
-- `vault add` with no `PATH` argument — currently `PATH` is required.
-  The "scan OS-conventional roots and let you pick a candidate"
-  behavior implied by the `[PATH]` brackets in the original design was
-  explicitly deferred, not forgotten.
-- No `init` command — the decisions log describes a bounded scan from
-  `Path.home()` + OS-typical roots (Documents, iCloud Drive, etc.) for
-  first-run setup. `discovery.find_vaults()` supports this (just needs
-  a root passed in), but nothing calls it with those default roots yet.
+- `vault add` with no `PATH` argument, and no `init` command — the "scan
+  OS-conventional roots and let you pick" first-run flow. `discovery.find_vaults()`
+  supports it; nothing calls it with default roots yet. `/add <path>` in the
+  TUI has the same limitation.
 - Chunker has no general max-chunk-size fallback (see above).
-- **No Textual app.** `ask` is a plain `console.input()` REPL loop. The
-  decisions log still commits to Textual for the polished UX; `Session`
-  holding the state is what makes that a UI change rather than an
-  architecture change. No `review` command either.
-- **No completion state in a session.** Prompt rule 6 means the tutor never
-  says "you've got it," so a conversation funnels forever and the only exit
-  is a blank line. Open question, not a task: rule 6 is doing real work and
-  should not be relaxed to fix this. More likely an end-of-session
-  affordance — on exit, print which notes you struggled with so you know
-  what to go re-read. `--sources` is already half of that.
-- **Provider fallback designed but not built** — see the decisions log for
-  the adapter shape and why it was deferred rather than built when the
-  Anthropic balance ran out. Note it would change `Session`'s constructor
-  and return types, rewriting much of `dialogue/test_socratic.py`.
-- **Prompt is evaluated but not tuned.** All nine rules now have transcript
-  evidence. No change has been made as a result — the one change attempted was
-  measured and reverted. Longer sessions (past 4 turns) remain unexplored.
-- `scripts/eval_dialogue.py` doesn't exist yet (see above).
+- **No `review` command.** The history tables (`turns`, `session_notes`) were
+  designed so it could answer "which notes do I keep failing on"; nothing
+  queries them that way yet. This is the spaced-repetition foundation and the
+  natural next feature.
+- **No completion state in a session.** Rule 6 means the tutor never says
+  "you've got it". Stall detection now catches the *failure* case (circling);
+  the *success* case — you answered well and it keeps drilling — is still
+  unhandled. Do not relax rule 6 to fix this.
+- **Late-session recitation.** The longer a session runs, the more the model
+  quotes the notes back verbatim. Measured, recorded, not acted on: the one
+  prompt rule that targeted it made things worse (decisions log). Resume makes
+  sessions longer, so this matters more than it did.
+- **Provider fallback designed but not built** — see the decisions log.
+- **Retrieval lets near-topic noise through.** "Redis — Run with docker" at
+  0.807 clears the 1.2 gate for a persistence question. Hasn't visibly hurt
+  question quality, but the threshold does less work than the numbers suggest.
+- **The TUI has not been driven interactively by the author at every
+  size.** Headless tests cover layout geometry at 60/80/100/120 columns; real
+  terminal behaviour (Ghostty, font scaling) was verified by the user for the
+  reported bugs, not exhaustively.
+- **No demo recording.** Phase 6 calls for one and there isn't one.
 
 ## Next step
 
-1. **An escape hatch for stuck sessions.** The measured gap above: after ~6
-   turns the model orbits one unanswered point forever and the user's only
-   move is to quit. Needs a design decision before code — options include a
-   turn-aware prompt rule (concede a narrower hint after N failed attempts),
-   a detected-stall nudge, or an explicit "move on" command. Do *not* relax
-   rule 6 to solve it.
-2. **Textual app for `ask`.** Now better specified by the eval: sessions are
-   short, so this is a focused conversation pane rather than a scrollback
-   archive, plus somewhere to surface `--sources` and whatever item 1 becomes.
-3. **A demo recording** (VHS or asciinema) checked in and embedded in the
-   README. Phase 6 calls for a demo and there isn't one; for a portfolio repo
-   this is worth more than any remaining feature. Do it after Textual so it is
-   only recorded once.
-4. **`init` command / `vault add` with no PATH** — the last of the original
-   first-run UX. `discovery.find_vaults()` already supports it.
-5. **Provider fallback** (`dialogue/providers.py`) when actually wanted —
-   shape already decided, see the decisions log.
-6. Consider whether `.trash` history is worth also purging from the vault
-   config over time — not urgent, just a possible future edge case.
+1. **`/review` — which notes do I keep failing on.** Everything it needs is
+   stored: per-session grounding chunks with distances, per-turn answers
+   including `NULL` for abandonment, and stall outcomes are inferable from
+   transcripts. A first cut is a query over `session_notes` joined to
+   unanswered/abandoned turns, rendered as "these notes came up N times and
+   you bailed on M of them". This is what turns history from a log into
+   the spaced-repetition feature the project's premise points at.
+2. **A demo recording** (VHS or asciinema) embedded in the README. The TUI
+   now exists, so it is recorded once. For a portfolio repo this is worth
+   more than any remaining feature.
+3. **`init` / `/add` with no path** — the last of the original first-run UX.
+4. **Provider fallback** when actually wanted — shape decided.
+5. `.trash` history purging — not urgent.
 
 ## Environment notes
 
@@ -498,9 +548,15 @@ first evidence that a 1.2 cutoff is doing less work than the numbers suggest.
 - `pip install -e ".[dev]"` after any dependency change to `pyproject.toml`.
 - Git repo has a remote (`origin/main`); `requirements.txt` was removed
   as redundant with `pyproject.toml`.
-- `python-frontmatter`, `openai`, `chromadb`, `python-dotenv`, `anthropic`
-  all live in main `dependencies`, not `[dev]` — all are runtime
-  dependencies of the shipped CLI, not just test tools.
+- `python-frontmatter`, `openai`, `chromadb`, `python-dotenv`, `anthropic`,
+  `textual` all live in main `dependencies`, not `[dev]` — all are runtime
+  dependencies of the shipped CLI, not just test tools. `pytest-asyncio` is
+  in `[dev]` for the TUI tests; `asyncio_mode = "auto"` is set in
+  `pyproject.toml` so they need no per-test marker.
+- Type checking is `npx pyright` — a node tool, deliberately not a Python
+  dependency. Config is `[tool.pyright]` in `pyproject.toml`, strict, and
+  must be clean before committing. (Three commits on the TUI branch went
+  through with pyright failing and had to be amended; run it first.)
 - `.env` holds `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, confirmed
   gitignored and untracked. `.env.example` also documents the optional
   `EMBEDDING_MODEL` and `DIALOGUE_MODEL` overrides.
@@ -516,3 +572,8 @@ first evidence that a 1.2 cutoff is doing less work than the numbers suggest.
 - Chroma's local persistent store lives at
   `platformdirs.user_data_dir("socratese")` — not tracked in git, not
   gitignored explicitly either since it's outside the repo entirely.
+  `sessions.db` (history) is a separate file in the same directory, so the
+  index can be deleted and rebuilt without losing transcripts.
+- The real database already holds sessions; one predates raw-message
+  storage and cannot be resumed (`*` in the listing). Deleting
+  `sessions.db` is safe — it is recreated with the current schema.
