@@ -4,12 +4,14 @@ from pathlib import Path
 
 import pytest
 from textual.containers import VerticalScroll
+from textual.content import Content
 from textual.pilot import Pilot
 from textual.widgets import Input, ProgressBar, Static
 
 from socratese import config, tutor
 from socratese.retrieval.models import RetrievedChunk
-from socratese.tui.app import SocrateseApp
+from socratese.tui import app as app_module
+from socratese.tui.app import SocrateseApp, banner
 from socratese.vault.models import Vault
 
 pytestmark = pytest.mark.asyncio
@@ -67,11 +69,15 @@ def wired(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 def written(app: SocrateseApp) -> str:
     """Everything the conversation pane has shown, as plain text.
 
-    Strip.text, not str(strip): the repr is a list of Segments, so a phrase
-    spanning two styles never appears literally and assertions pass vacuously.
+    Rendered plain text, not the raw markup: a phrase that spans two styles
+    ("(o,o)" with coloured eyes) never appears literally in the markup, so
+    an assertion on it would fail — or, worse, a `not in` would pass
+    vacuously.
     """
     log = app.query_one("#log", VerticalScroll)
-    return "\n".join(str(w.content) for w in log.query(Static))
+    return "\n".join(
+        Content.from_markup(str(w.content)).plain for w in log.query(Static)
+    )
 
 
 async def submit(pilot: Pilot[None], app: SocrateseApp, text: str) -> None:
@@ -85,6 +91,41 @@ async def test_it_opens_showing_the_banner_and_vaults(wired: Path):
     async with app.run_test():
         assert "Socratese" in written(app)
         assert "work" in written(app)
+
+
+async def test_the_owl_greets_you_at_launch(wired: Path):
+    app = SocrateseApp()
+    async with app.run_test():
+        assert "(o,o)" in written(app)
+        assert "/help for commands." in written(app)
+
+
+async def test_the_owl_appears_once_and_never_again(wired: Path):
+    """A mascot on every turn stops being charm and starts being noise."""
+    app = SocrateseApp()
+    async with app.run_test() as pilot:
+        await submit(pilot, app, "/help")
+        await submit(pilot, app, "/vaults work")
+
+        assert written(app).count("(o,o)") == 1
+
+
+async def test_the_banner_colours_only_the_eyes_the_name_and_the_command():
+    """Only ANSI-named colours, so the header inherits the terminal's theme."""
+    content = Content.from_markup(banner())
+    coloured = {content.plain[s.start : s.end]: str(s.style) for s in content.spans}
+
+    assert coloured["o,o"] == "bold ansi_bright_yellow"
+    assert coloured["Socratese"] == "bold ansi_bright_cyan"
+    assert coloured["/help"] == "ansi_green"
+    assert all("ansi_" in style for style in coloured.values()), coloured
+
+
+async def test_the_owl_art_is_escaped_before_it_becomes_markup(monkeypatch: pytest.MonkeyPatch):
+    """A future edit to the art containing `[` must not open a tag."""
+    monkeypatch.setattr(app_module, "OWL", ("[o,o]", "", "", ""))
+
+    assert "[o,o]" in Content.from_markup(banner()).plain
 
 
 async def test_help_lists_every_command(wired: Path):

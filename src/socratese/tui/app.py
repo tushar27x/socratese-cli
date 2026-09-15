@@ -18,6 +18,7 @@ import openai
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
+from textual.markup import escape
 from textual.widgets import Input, ProgressBar, Static
 
 from socratese import tutor
@@ -34,7 +35,42 @@ from socratese.tui.commands import (
     unknown_command_hint,
 )
 
-BANNER = "Socratese — you answer, it asks. /help for commands."
+#: Athena's owl, shown once at launch and never again: a mascot that appears
+#: on every turn stops being charm and starts being noise.
+OWL = (
+    " ,___, ",
+    " (o,o) ",
+    " /)_)  ",
+    '  " "  ',
+)
+EYES = "o,o"
+TAGLINE = (
+    "",
+    "[bold ansi_bright_cyan]Socratese[/bold ansi_bright_cyan]",
+    "you answer, it asks.",
+    "[ansi_green]/help[/ansi_green] for commands.",
+)
+
+
+def banner() -> str:
+    """The launch header: the owl beside the tagline, as one block of markup.
+
+    One block, not four `say()` calls, so the shape re-wraps as a unit. Only
+    ANSI-named colours are used — the eyes in the terminal's bright yellow,
+    the name in the same cyan the questions are asked in, `/help` in the
+    green that already marks things you can type — so the header takes its
+    accents from the user's theme rather than painting its own. The art is
+    escaped so a future edit containing `[` cannot open a tag by accident.
+    """
+    eyes = (
+        f"[/ansi_bright_black][bold ansi_bright_yellow]{EYES}"
+        f"[/bold ansi_bright_yellow][ansi_bright_black]"
+    )
+    rows: list[str] = []
+    for art, text in zip(OWL, TAGLINE):
+        feathers = escape(art).replace(EYES, eyes)
+        rows.append(f"[ansi_bright_black]{feathers}[/ansi_bright_black]   {text}")
+    return "\n".join(rows)
 
 
 class SocrateseApp(App[None]):
@@ -131,7 +167,7 @@ class SocrateseApp(App[None]):
 
     def on_mount(self) -> None:
         self.title = "socratese"
-        self.say(f"[bold]{BANNER}[/bold]")
+        self.say(banner())
         self.show_vaults()
         self.query_one("#entry", Input).focus()
 

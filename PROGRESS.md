@@ -328,7 +328,7 @@ Same mistake each time: testing the mechanism rather than the outcome. The
 `# type: ignore` comments that had been hiding pyright errors in the TUI
 tests were removed by typing the app explicitly.
 
-Tests: 245 passing, mirroring source structure under `tests/` —
+Tests: 249 passing, mirroring source structure under `tests/` —
 `vault/test_models.py`, `test_config.py`, `vault/test_discovery.py`,
 `cli/test_vault.py`, `cli/test_index.py`, `ingest/test_parser.py`,
 `chunking/test_chunker.py`, `embedding/test_embedder.py`,

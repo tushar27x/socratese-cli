@@ -92,7 +92,8 @@ commands complete as you type.
 | `/end`, `/quit` | End the session; leave the app |
 
 The app inherits your terminal's colours and background rather than painting
-its own, and re-wraps when you resize.
+its own, and re-wraps when you resize. The owl at launch is Athena's — the
+only accents on screen are your terminal's own ANSI yellow, cyan and green.
 
 Every command also exists as a plain subcommand for scripting — `socratese ask
 "<topic>"`, `socratese resume 3`, `socratese index all`, and the `vault`
@@ -205,7 +206,7 @@ is in [`CLAUDE.md`](CLAUDE.md). Current status and known gaps are in
 ## Development
 
 ```bash
-pytest              # 245 tests, including the app driven headlessly
+pytest              # 249 tests, including the app driven headlessly
 npx pyright         # strict, zero errors across src/ and tests/
 ```
 
