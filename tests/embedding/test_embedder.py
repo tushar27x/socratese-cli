@@ -7,7 +7,12 @@ import pytest
 from openai import OpenAI
 
 from socratese.chunking.models import Chunk
-from socratese.embedding.embedder import embed_chunks, embed_text, get_client
+from socratese.embedding.embedder import (
+    BATCH_SIZE,
+    embed_chunks,
+    embed_text,
+    get_client,
+)
 
 
 def make_chunk(content: str) -> Chunk:
@@ -113,3 +118,66 @@ def test_get_client_returns_client_when_api_key_set(monkeypatch: pytest.MonkeyPa
     client = get_client()
 
     assert client.api_key == "fake-key-for-testing"
+
+
+# --- batching -----------------------------------------------------------------
+
+
+class CountingEmbeddings:
+    """Records every request, so batch boundaries are observable."""
+
+    def __init__(self) -> None:
+        self.batches: list[int] = []
+
+    def create(self, model: str, input: list[str]):
+        self.batches.append(len(input))
+        return SimpleNamespace(
+            data=[SimpleNamespace(embedding=[float(i)] * 3) for i in range(len(input))]
+        )
+
+
+class CountingClient:
+    def __init__(self) -> None:
+        self.embeddings = CountingEmbeddings()
+
+
+def test_a_large_vault_is_split_into_batches():
+    """One request for a whole vault works until it does not — a big vault can
+    exceed the request limit, and one failure would cost every chunk."""
+    client = CountingClient()
+    chunks = [make_chunk(f"chunk {i}") for i in range(BATCH_SIZE * 2 + 5)]
+
+    embed_chunks(chunks, client=cast(OpenAI, client))
+
+    assert client.embeddings.batches == [BATCH_SIZE, BATCH_SIZE, 5]
+
+
+def test_batching_preserves_order():
+    """Embeddings are matched to chunks by position downstream, so a reordered
+    batch would silently attach every vector to the wrong note."""
+    client = CountingClient()
+    chunks = [make_chunk(f"chunk {i}") for i in range(BATCH_SIZE + 3)]
+
+    result = embed_chunks(chunks, client=cast(OpenAI, client))
+
+    assert len(result) == len(chunks)
+    assert result[0] == [0.0, 0.0, 0.0]
+    assert result[BATCH_SIZE] == [0.0, 0.0, 0.0]  # first of the second batch
+
+
+def test_progress_is_reported_after_each_batch():
+    client = CountingClient()
+    chunks = [make_chunk(f"chunk {i}") for i in range(BATCH_SIZE * 2)]
+    seen: list[tuple[int, int]] = []
+
+    embed_chunks(chunks, client=cast(OpenAI, client), on_progress=lambda d, t: seen.append((d, t)))
+
+    assert seen == [(BATCH_SIZE, BATCH_SIZE * 2), (BATCH_SIZE * 2, BATCH_SIZE * 2)]
+
+
+def test_a_small_vault_is_a_single_request():
+    client = CountingClient()
+
+    embed_chunks([make_chunk("only one")], client=cast(OpenAI, client))
+
+    assert client.embeddings.batches == [1]

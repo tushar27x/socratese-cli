@@ -8,7 +8,7 @@ from anthropic.types import MessageParam
 from typer.testing import CliRunner
 
 from socratese import config
-from socratese.cli import ask as ask_module
+from socratese import tutor
 from socratese.cli.main import app
 from socratese.history.store import connect, load_session, recent_sessions
 from socratese.retrieval.models import RetrievedChunk
@@ -59,10 +59,10 @@ class FakeSession:
 
 @pytest.fixture
 def wired(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    """Patch names on cli.ask, which imports them at module load.
+    """Patch names on socratese.tutor, which is where the CLI now gets them.
 
     Patching socratese.retrieval.retriever directly would rebind a name that
-    ask.py never looks at again — the same trap documented for test_index.py.
+    tutor.py never looks at again — the same trap documented for test_index.py.
     """
     monkeypatch.setattr(config, "get_config_path", lambda: tmp_path / "config.toml")
     config.save_vaults([Vault(name="v", path=tmp_path, last_indexed=datetime.now(timezone.utc))])
@@ -72,8 +72,8 @@ def wired(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     ) -> list[RetrievedChunk]:
         return [make_chunk()]
 
-    monkeypatch.setattr(ask_module, "retrieve", fake_retrieve)
-    monkeypatch.setattr(ask_module, "Session", FakeSession)
+    monkeypatch.setattr(tutor, "retrieve", fake_retrieve)
+    monkeypatch.setattr(tutor, "Session", FakeSession)
 
     db = tmp_path / "sessions.db"
     monkeypatch.setattr("socratese.history.store.get_db_path", lambda: db)
@@ -98,7 +98,7 @@ def test_refuses_when_nothing_clears_the_relevance_gate(
     ) -> list[RetrievedChunk]:
         return [make_chunk(distance=1.4)]
 
-    monkeypatch.setattr(ask_module, "retrieve", nothing_relevant)
+    monkeypatch.setattr(tutor, "retrieve", nothing_relevant)
 
     result = runner.invoke(app, ["ask", "vector databases"])
 
@@ -185,7 +185,7 @@ def test_vault_filters_are_passed_through_to_retrieval(
         seen["vaults"] = vaults
         return [make_chunk()]
 
-    monkeypatch.setattr(ask_module, "retrieve", spy)
+    monkeypatch.setattr(tutor, "retrieve", spy)
 
     runner.invoke(app, ["ask", "redis", "--vault", "v"], input="\n")
 
@@ -200,7 +200,7 @@ def test_no_vault_flag_searches_everything(monkeypatch: pytest.MonkeyPatch, wire
         seen["vaults"] = vaults
         return [make_chunk()]
 
-    monkeypatch.setattr(ask_module, "retrieve", spy)
+    monkeypatch.setattr(tutor, "retrieve", spy)
 
     runner.invoke(app, ["ask", "redis"], input="\n")
 

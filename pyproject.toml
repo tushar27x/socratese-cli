@@ -13,11 +13,13 @@ dependencies = [
     "chromadb>=0.5",
     "python-dotenv>=1.0",
     "anthropic>=1.0",
+    "textual>=0.79",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.23",
 ]
 
 [project.scripts]
@@ -37,3 +39,7 @@ venvPath = "."
 venv = "venv"
 # chromadb ships no type stubs; its runtime types are still checked via inference.
 reportMissingTypeStubs = false
+
+[tool.pytest.ini_options]
+# the Textual app is driven through its async test pilot
+asyncio_mode = "auto"

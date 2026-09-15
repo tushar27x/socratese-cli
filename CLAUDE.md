@@ -426,6 +426,131 @@ last_indexed = "2026-09-01T10:00:00Z"
   merged into `test_socratic.py` so tests mirror source structure one-to-one
   again.
 
+### Session history: SQLite, not Chroma, capped at ten
+- `history/store.py`, a separate `sessions.db` in `user_data_dir`. Not Chroma:
+  the questions asked of history are relational ("my last ten", "which notes
+  do I keep failing on"), not nearest-neighbour — and the Chroma collection is
+  disposable (re-run `index`) while transcripts are not. They must not share a
+  store that a re-index could wipe. stdlib `sqlite3`, so no new dependency.
+- **Both representations, each doing one job.** `turns` is the queryable view
+  (`review` and spaced repetition need it); `messages` is the raw conversation
+  as sent to the API, stored verbatim as JSON for replay. Neither can do the
+  other's job. Written in the same operation so they cannot drift.
+- `session_notes` stores chunk *content*, not just identifiers, so a resumed
+  session rebuilds the exact prompt even after a re-index.
+- **Writes are incremental** — the question is stored before its answer
+  exists. A Ctrl-C'd session leaves its transcript, and `answer = NULL` records
+  that the user walked away, which is signal.
+- **Pruning is by last activity, not id.** Resuming an old session must
+  protect it; ordering by `id` would let it be culled by newer sessions the
+  user abandoned. Pruning runs at session *start* so the newest is never the
+  one dropped.
+- **History never interrupts tutoring.** A database that cannot be opened or
+  written degrades to not recording, silently. A full disk must not cost a
+  session over a logging feature. `PRAGMA foreign_keys = ON` is load-bearing:
+  sqlite3 disables it by default, which would have made every `ON DELETE
+  CASCADE` silently inert.
+- `check_same_thread=False` on the connection, because the TUI opens a session
+  on a worker thread and closes it on the event loop. Safe here for two
+  checked reasons: `sqlite3.threadsafety` is 3 on this build, and one user
+  drives one turn at a time, so the connection is never used concurrently.
+
+### Resume reuses the row, restores stored chunks, never re-filters
+- A resumed conversation continues in the row it started in. Splitting would
+  fragment the transcript and burn two of ten slots on one conversation.
+- Chunks come from storage, not a fresh retrieval: the messages already refer
+  to those excerpts, so re-retrieving after a re-index could swap them and
+  leave the transcript incoherent. And they are not re-filtered by threshold —
+  that happened at session start, and re-filtering could drop a note the
+  conversation has already been quoting.
+- An unanswered final question is re-asked on resume; an answered one gets the
+  follow-up the user never saw.
+
+### Stall detection lives in code, because the prompt could not do it
+- Three prompt attempts, all measured against real transcripts: a rule against
+  preamble in follow-ups (no effect), a rule against reciting the notes (made
+  rule 9 worse), and an amendment to rule 8 telling the model to stop when the
+  excerpts cannot settle what it is asking (no effect — a real React session
+  reproduced and circled six turns again).
+- **The pattern: this model follows concrete per-turn rules well and
+  conditional meta-rules poorly.** "Never answer" holds; "notice X, then
+  change mode" does not. So the noticing moved into `dialogue/stall.py`, which
+  is deterministic and testable, and the intervention belongs to the UI.
+- The heuristic is *orbiting*, not repetition: a sliding window of four
+  questions all sharing content words. No pair need look alike, which is why
+  pairwise similarity missed it. Topic words are excluded (every question in a
+  React session says "React") and tokens under three characters are dropped
+  (`v` is noise in a warning). Validated by replaying captured transcripts,
+  not by re-spending on the API.
+- **The React session was the key finding.** The user's notes describe what
+  the virtual DOM is *for* but never mention diffing two virtual trees, so
+  the model was driving at an answer its source material did not contain — a
+  rule 3 violation, and unwinnable. When a session stalls, the notes are now
+  revealed on exit whether or not `--sources` was passed: "your note is
+  incomplete here" is the most useful thing a notes-based tutor can say.
+
+### `tutor.py`: one setup sequence shared by every UI
+- The CLI had session setup inline — which vaults count, what to retrieve,
+  whether anything cleared the gate. The TUI needed the identical sequence.
+  Two copies would drift, so it became `tutor.start()` and `tutor.resume()`.
+- It raises typed `TutorError`s rather than printing, so each UI owns its own
+  rendering. It is the one layer that knows about config, retrieval and
+  dialogue together.
+
+### Vault filtering: a metadata tag, one collection, filtered inside Chroma
+- Every vault's chunks live in one collection with a `vault` metadata field;
+  `retrieve(vaults=[...])` becomes a `where` clause. One collection with a
+  filter beats one per vault because selecting *several* vaults stays a single
+  query.
+- **Filtering happens inside Chroma, not after.** Post-filtering a global
+  top-5 gives "however many of those five came from the vault you asked for",
+  sometimes zero. Asking for five from one vault must return five.
+- `vault` is a parameter on `add_chunks`, not a field on `Chunk`: which vault
+  a note lives in is a storage concern, and the chunker has no idea vaults
+  exist.
+- An unknown `--vault` name is rejected, not ignored. Silently searching
+  everything when a filter was asked for is worse than failing.
+- Chunks indexed before the field existed report `vault=""` rather than
+  breaking retrieval; the real index was re-indexed (851 chunks, no
+  duplicates, thanks to `upsert` on the stable id).
+
+### The terminal app: bare `socratese`, subcommands kept, thread workers
+- `socratese` with no subcommand opens the Textual app (Typer's
+  `invoke_without_command`). Every subcommand still works for scripting and
+  is what the CLI tests exercise.
+- Every network call runs in a `@work(thread=True)` worker. Textual's loop is
+  single-threaded; an embedding or dialogue request on it would freeze the
+  whole interface, including the spinner meant to show something is happening.
+- **Only a leading slash makes a command.** Topics contain slashes ("tcp/ip"),
+  so `parse()` checks the first character. Plain text is an answer.
+- **The app inherits the terminal's theme.** `ansi_color=True` emits the
+  terminal's own sixteen ANSI colours instead of Textual's palette, and every
+  background is transparent so the terminal's ground (and wallpaper) shows
+  through. `Header` and `Footer` were dropped: both paint solid bars.
+- **A scroll of `Static` widgets, not a `RichLog`.** `RichLog` wraps text once
+  at write time and never again; increasing the terminal's font scale means
+  fewer columns, which left every earlier line too wide and cut off.
+  `Static` re-wraps whenever its width changes.
+- The progress bar and the input share **one docked container with explicit
+  heights.** Docking them separately put the bar on the input's border row,
+  invisible; `height: auto` on the container collapsed it to zero and let the
+  transcript scroll under the input. Both found by asserting on geometry
+  rather than on CSS classes.
+- Answers are echoed as `> text`; commands are not. Without the echo the pane
+  showed only questions, which read as a list of demands.
+- A custom `SlashCommandSuggester`, because `SuggestFromList`'s
+  `case_sensitive=False` does not match a differently-cased prefix in the
+  installed Textual. It folds inside the method rather than relying on the
+  caching wrapper, so a direct call and the widget agree.
+
+### Embedding is batched (128 per request)
+- Sending a whole vault in one request works until it does not: a large vault
+  can exceed the request limit, and one failure costs every chunk. Batching
+  also makes real progress reportable instead of a spinner that cannot move.
+- Order is preserved and tested: embeddings are matched to chunks by position
+  downstream, so a reordered batch would silently attach every vector to the
+  wrong note.
+
 ---
 
 ## 6. When in doubt

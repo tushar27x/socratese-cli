@@ -73,29 +73,58 @@ Indexing a vault costs a fraction of a cent; a conversation costs less.
 
 ```bash
 socratese vault add ~/Documents/MyVault   # register a vault
-socratese vault list                      # see what is registered
 socratese index MyVault                   # parse, chunk, embed, store
-
-socratese ask "how does redis persist data to disk?"
+socratese                                 # open the app
 ```
 
-Answer each question in your own words. A blank line or `Ctrl-D` ends the
-session.
+`socratese` on its own opens a terminal app. Type `/ask <topic>` to start,
+answer each question in your own words, and `/end` when you are done. Slash
+commands complete as you type.
 
-| Command | What it does |
+| In the app | What it does |
 |---|---|
-| `vault add <path>` | Register an Obsidian vault (detected by its `.obsidian/` directory). Its name is the directory name |
-| `vault list` | Show registered vaults and when each was last indexed |
-| `vault remove <name>` | Stop tracking a vault |
-| `vault rescan` | Drop vaults whose directories have disappeared |
-| `index <name>` | Index one vault, or `all` for every registered vault |
-| `ask "<topic>"` | Start a Socratic session on a topic |
+| `/ask <topic>` | Start a session on a topic |
+| `/resume` | List recent sessions; `/resume <id>` continues one where you left it |
+| `/vaults` | Pick which vaults sessions search (or `/vaults work personal`) |
+| `/add <path>` | Track a new Obsidian vault |
+| `/index <name>` | Index a vault, with progress |
+| `/sources` | Reveal which notes the current session drew on |
+| `/end`, `/quit` | End the session; leave the app |
 
-`ask` takes two flags: `--chunks / -n` sets how many notes to retrieve
-(default 5), and `--sources / -s` reveals which notes grounded the
-conversation. Sources print **after** the session ends, not alongside each
-question — naming the note mid-conversation tells you where to look, which
-short-circuits exactly the recall the tool exists to force.
+The app inherits your terminal's colours and background rather than painting
+its own, and re-wraps when you resize.
+
+Every command also exists as a plain subcommand for scripting — `socratese ask
+"<topic>"`, `socratese resume 3`, `socratese index all`, and the `vault`
+group — so the app is a convenience, not a requirement.
+
+`ask` takes `--vault / -v` to limit a session to named vaults, `--chunks / -n`
+for how many notes to draw on, and `--sources / -s` to reveal them at the end.
+Sources print **after** the session, not alongside each question — naming the
+note mid-conversation tells you where to look, which short-circuits exactly
+the recall the tool exists to force.
+
+### When it circles
+
+Sometimes your notes don't actually contain what the tutor is driving at. It
+cannot tell — it will keep rephrasing the same question. The app detects this
+(four consecutive questions orbiting the same terms) and says so:
+
+```
+These last few questions are all circling 'changed'.
+Your notes may not settle what it is driving at. /end to stop and see them.
+```
+
+On exit after a stall, the grounding notes are listed under *worth re-reading
+— and possibly filling in*. An incomplete note is a useful thing to learn; six
+turns of interrogation about something you never wrote down is not.
+
+### Sessions are kept
+
+The last ten sessions are stored locally, including your answers and the
+notes each one drew on. `/resume` picks one up exactly where you left it —
+same notes, same conversation — even if you have re-indexed since. A session
+you abandoned mid-question resumes on that question.
 
 ## How it works
 
@@ -126,8 +155,11 @@ QUERY TIME        topic ──▶ embed ─────────────�
 | Chunking | `chunking/chunker.py` | One chunk per heading section |
 | Embedding | `embedding/embedder.py` | OpenAI `text-embedding-3-small` |
 | Storage | `vectorstore/store.py` | Chroma, `upsert` keyed on `sha256(path::heading)` so re-indexing is idempotent |
-| Retrieval | `retrieval/retriever.py` | Vector similarity, distances carried through |
-| Dialogue | `dialogue/` | Prompt construction (pure) and the conversation (`Session`) |
+| Retrieval | `retrieval/retriever.py` | Vector similarity, distances carried through, filterable by vault |
+| Dialogue | `dialogue/` | Prompt construction (pure), the conversation (`Session`), stall detection |
+| Setup | `tutor.py` | The one sequence both UIs share: which vaults, what to retrieve, did anything clear the gate |
+| History | `history/` | SQLite, last ten sessions, raw messages for replay — separate from the disposable index |
+| App | `tui/` | Textual; every network call on a worker thread |
 
 ## Design decisions worth calling out
 
@@ -148,6 +180,18 @@ never correct a wrong answer directly, never repeat a question. When a scripted
 answer contradicts the notes, the model asks a question that sends you back to
 the contradicting passage rather than correcting you.
 
+**Stall detection is code, not prompt.** Three attempts to make the model
+notice it was circling — and stop — were measured against real transcripts.
+None worked; one made things worse. The model follows concrete per-turn rules
+("never answer") well and conditional meta-rules ("notice X, then change mode")
+poorly. So the noticing is a deterministic sliding-window heuristic in
+`dialogue/stall.py`, and the app does the intervening.
+
+**Session history is SQLite, separate from the vector store.** The index is
+disposable — re-run `index` and it's back. Transcripts aren't. They must not
+share a store that a re-index could wipe, and the questions asked of history
+("my last ten", "which notes do I keep failing on") are relational anyway.
+
 **Prompt rules are evaluated, not assumed.** `scripts/eval_dialogue.py` drives
 scripted conversations through `Session` — a wrong answer, a surrender, a
 string of vague ones — so the rules can be judged without typing by hand. A
@@ -161,7 +205,7 @@ is in [`CLAUDE.md`](CLAUDE.md). Current status and known gaps are in
 ## Development
 
 ```bash
-pytest              # 102 tests
+pytest              # 245 tests, including the app driven headlessly
 npx pyright         # strict, zero errors across src/ and tests/
 ```
 
@@ -175,7 +219,8 @@ deliberately broken, and each mutation must break exactly one test.
 
 ## Status
 
-Working end to end against a real 237-note vault. Not yet built: a Textual UI
-for the session (it is currently a plain readline loop), a first-run `init`
-command, and provider fallback. See [`PROGRESS.md`](PROGRESS.md) for the full
-list and the reasoning behind each deferral.
+Working end to end against a real 237-note vault, in the app and from the
+command line. Not yet built: a `review` command over session history (the
+tables are designed for it), a first-run `init`, and provider fallback. See
+[`PROGRESS.md`](PROGRESS.md) for the full list and the reasoning behind each
+deferral.
