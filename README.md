@@ -60,7 +60,7 @@ Requires Python 3.11+, an OpenAI API key (embeddings) and an Anthropic API key
 (dialogue).
 
 ```bash
-git clone <repo-url> && cd socratese
+git clone https://github.com/tushar27x/socratese-cli.git && cd socratese-cli
 python -m venv venv && source venv/bin/activate
 pip install -e ".[dev]"
 
