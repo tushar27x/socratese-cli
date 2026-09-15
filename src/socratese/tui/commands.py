@@ -20,7 +20,7 @@ class Command:
 COMMANDS: tuple[Command, ...] = (
     Command("ask", "/ask <topic>", "Be questioned about a topic"),
     Command("resume", "/resume [id]", "List past sessions, or continue one"),
-    Command("vaults", "/vaults [name ...]", "Show vaults, or limit the next session to some"),
+    Command("vaults", "/vaults [name ...]", "Pick which vaults sessions search"),
     Command("add", "/add <path>", "Track a new Obsidian vault"),
     Command("index", "/index <name|all>", "Index a vault's notes"),
     Command("sources", "/sources", "Reveal which notes the current session drew on"),

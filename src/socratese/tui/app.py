@@ -26,6 +26,7 @@ from socratese.dialogue.stall import is_stalled, orbiting_terms
 from socratese.history.models import SessionRecord
 from socratese.history.recorder import SessionRecorder, recording, resuming
 from socratese.history.store import connect, load_session, recent_sessions
+from socratese.tui.vault_picker import VaultPicker
 from socratese.tui.commands import (
     COMMANDS,
     SlashCommandSuggester,
@@ -192,7 +193,7 @@ class SocrateseApp(App[None]):
     def cmd_vaults(self, rest: str) -> None:
         names = rest.split()
         if not names:
-            self.show_vaults()
+            self.pick_vaults()
             return
 
         known = {v.name for v in tutor.indexed_vaults()}
@@ -286,6 +287,23 @@ class SocrateseApp(App[None]):
     def progress_done(self) -> None:
         self.query_one("#progress", ProgressBar).remove_class("running")
         self.query_one("#bottom").remove_class("indexing")
+
+    def pick_vaults(self) -> None:
+        from socratese.config import load_vaults
+
+        vaults = load_vaults()
+        if not vaults:
+            self.say("[ansi_yellow]No vaults tracked.[/ansi_yellow] /add <path> to start.")
+            return
+
+        def chosen(names: list[str] | None) -> None:
+            if names is None:
+                return  # cancelled; leave the selection alone
+            self.selected_vaults = names
+            scope = ", ".join(names) if names else "all indexed vaults"
+            self.say(f"[ansi_green]Sessions will search:[/ansi_green] {scope}")
+
+        self.push_screen(VaultPicker(vaults, self.selected_vaults), chosen)
 
     # --- views ----------------------------------------------------------
 
